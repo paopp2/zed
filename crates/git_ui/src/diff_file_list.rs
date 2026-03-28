@@ -10,7 +10,7 @@ use gpui::{
 use menu;
 use std::ops::Range;
 use theme::ActiveTheme;
-use ui::prelude::*;
+use ui::{Tooltip, prelude::*};
 
 actions!(
     diff_file_list,
@@ -448,9 +448,14 @@ impl DiffFileList {
                     }))
                     .into_any_element()
             }
-            DiffFileEntry::File { name, depth, status, stats, .. } => {
+            DiffFileEntry::File { repo_path, name, depth, status, stats } => {
                 let label_color = status_color(status);
                 let stats = *stats;
+
+                let mut tooltip_text = repo_path.as_std_path().to_string_lossy().into_owned();
+                if let Some(stat) = stats {
+                    tooltip_text.push_str(&format!("  +{} −{}", stat.added, stat.deleted));
+                }
 
                 h_flex()
                     .id(ElementId::NamedInteger("diff-file".into(), ix as u64))
@@ -465,6 +470,7 @@ impl DiffFileList {
                     .when(selected && self.focus_handle.is_focused(window), |this| {
                         this.border_1().border_color(colors.panel_focused_border)
                     })
+                    .tooltip(Tooltip::text(tooltip_text))
                     .child(
                         Icon::new(status_icon_name(status))
                             .size(IconSize::Small)
