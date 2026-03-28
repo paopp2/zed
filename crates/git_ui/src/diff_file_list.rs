@@ -92,8 +92,16 @@ impl DiffFileList {
         if self.source_entries == *entries {
             return;
         }
+
+        let selected_path = self.selected_path();
+
         self.source_entries = entries.clone();
         self.rebuild_flattened(entries);
+
+        if let Some(path) = &selected_path {
+            self.restore_selection_by_path(path);
+        }
+
         cx.notify();
     }
 
@@ -200,11 +208,34 @@ impl DiffFileList {
         }
     }
 
+    fn selected_path(&self) -> Option<RepoPath> {
+        let ix = self.selected_index?;
+        match self.flattened.get(ix) {
+            Some(DiffFileEntry::File { repo_path, .. }) => Some(repo_path.clone()),
+            Some(DiffFileEntry::Directory { path, .. }) => Some(path.clone()),
+            None => None,
+        }
+    }
+
+    fn restore_selection_by_path(&mut self, path: &RepoPath) {
+        self.selected_index = self.flattened.iter().position(|entry| match entry {
+            DiffFileEntry::File { repo_path, .. } => repo_path == path,
+            DiffFileEntry::Directory { path: p, .. } => p == path,
+        });
+    }
+
     fn toggle_directory(&mut self, path: &RepoPath, cx: &mut Context<Self>) {
+        let selected_path = self.selected_path();
+
         let expanded = self.expanded_dirs.entry(path.clone()).or_insert(true);
         *expanded = !*expanded;
         let entries = self.source_entries.clone();
         self.rebuild_flattened(&entries);
+
+        if let Some(path) = &selected_path {
+            self.restore_selection_by_path(path);
+        }
+
         cx.notify();
     }
 
