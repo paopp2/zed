@@ -25,11 +25,16 @@ use crate::{
 pub enum DiffBase {
     Head,
     Merge { base_ref: SharedString },
+    Between { from_ref: SharedString, to_ref: SharedString },
 }
 
 impl DiffBase {
     pub fn is_merge_base(&self) -> bool {
         matches!(self, DiffBase::Merge { .. })
+    }
+
+    pub fn is_between(&self) -> bool {
+        matches!(self, DiffBase::Between { .. })
     }
 }
 
@@ -249,22 +254,22 @@ impl BranchDiff {
         cx: &mut AsyncWindowContext,
     ) -> Result<()> {
         let task = this.update(cx, |this, cx| {
-            let DiffBase::Merge { base_ref } = this.diff_base.clone() else {
-                return None;
+            let diff_tree_type = match this.diff_base.clone() {
+                DiffBase::Head => return None,
+                DiffBase::Merge { base_ref } => DiffTreeType::MergeBase {
+                    base: base_ref,
+                    head: "HEAD".into(),
+                },
+                DiffBase::Between { from_ref, to_ref } => DiffTreeType::Since {
+                    base: from_ref,
+                    head: to_ref,
+                },
             };
             let Some(repo) = this.repo.as_ref() else {
                 this.tree_diff.take();
                 return None;
             };
-            repo.update(cx, |repo, cx| {
-                Some(repo.diff_tree(
-                    DiffTreeType::MergeBase {
-                        base: base_ref,
-                        head: "HEAD".into(),
-                    },
-                    cx,
-                ))
-            })
+            repo.update(cx, |repo, cx| Some(repo.diff_tree(diff_tree_type, cx)))
         })?;
         let Some(task) = task else { return Ok(()) };
 
