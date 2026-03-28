@@ -5,16 +5,23 @@ use git::{
 };
 use gpui::{
     App, ClickEvent, Context, EventEmitter, FocusHandle, Focusable, KeyContext, Render,
-    ScrollStrategy, SharedString, UniformListScrollHandle, Window, uniform_list,
+    ScrollStrategy, SharedString, UniformListScrollHandle, Window, actions, uniform_list,
 };
+use menu;
 use std::ops::Range;
 use theme::ActiveTheme;
 use ui::prelude::*;
+
+actions!(
+    diff_file_list,
+    [CollapseSelectedEntry, ExpandSelectedEntry, FocusEditor]
+);
 
 const TREE_INDENT: f32 = 16.0;
 
 pub enum DiffFileListEvent {
     FileSelected { repo_path: RepoPath },
+    FocusEditor,
 }
 
 pub struct DiffFileList {
@@ -223,6 +230,145 @@ impl DiffFileList {
         cx.notify();
     }
 
+    fn select_next(
+        &mut self,
+        _: &menu::SelectNext,
+        _window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        if self.flattened.is_empty() {
+            return;
+        }
+        let new_index = match self.selected_index {
+            Some(ix) => (ix + 1).min(self.flattened.len() - 1),
+            None => 0,
+        };
+        self.selected_index = Some(new_index);
+        self.scroll_to_selected_entry();
+        cx.notify();
+    }
+
+    fn select_previous(
+        &mut self,
+        _: &menu::SelectPrevious,
+        _window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        if self.flattened.is_empty() {
+            return;
+        }
+        let new_index = match self.selected_index {
+            Some(ix) => ix.saturating_sub(1),
+            None => 0,
+        };
+        self.selected_index = Some(new_index);
+        self.scroll_to_selected_entry();
+        cx.notify();
+    }
+
+    fn select_first(
+        &mut self,
+        _: &menu::SelectFirst,
+        _window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        if self.flattened.is_empty() {
+            return;
+        }
+        self.selected_index = Some(0);
+        self.scroll_to_selected_entry();
+        cx.notify();
+    }
+
+    fn select_last(
+        &mut self,
+        _: &menu::SelectLast,
+        _window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        if self.flattened.is_empty() {
+            return;
+        }
+        self.selected_index = Some(self.flattened.len() - 1);
+        self.scroll_to_selected_entry();
+        cx.notify();
+    }
+
+    fn confirm(
+        &mut self,
+        _: &menu::Confirm,
+        _window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let Some(index) = self.selected_index else {
+            return;
+        };
+        match self.flattened.get(index).cloned() {
+            Some(DiffFileEntry::File { repo_path, .. }) => {
+                cx.emit(DiffFileListEvent::FileSelected { repo_path });
+            }
+            Some(DiffFileEntry::Directory { path, .. }) => {
+                self.toggle_directory(&path, cx);
+            }
+            None => {}
+        }
+    }
+
+    fn expand_selected_entry(
+        &mut self,
+        _: &ExpandSelectedEntry,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let Some(index) = self.selected_index else {
+            return;
+        };
+        match self.flattened.get(index).cloned() {
+            Some(DiffFileEntry::Directory { path, expanded, .. }) => {
+                if expanded {
+                    self.select_next(&menu::SelectNext, window, cx);
+                } else {
+                    self.toggle_directory(&path, cx);
+                }
+            }
+            _ => {
+                self.select_next(&menu::SelectNext, window, cx);
+            }
+        }
+    }
+
+    fn collapse_selected_entry(
+        &mut self,
+        _: &CollapseSelectedEntry,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let Some(index) = self.selected_index else {
+            return;
+        };
+        match self.flattened.get(index).cloned() {
+            Some(DiffFileEntry::Directory { path, expanded, .. }) => {
+                if expanded {
+                    self.toggle_directory(&path, cx);
+                } else {
+                    self.select_previous(&menu::SelectPrevious, window, cx);
+                }
+            }
+            _ => {
+                self.select_previous(&menu::SelectPrevious, window, cx);
+            }
+        }
+    }
+
+    fn focus_editor(
+        &mut self,
+        _: &FocusEditor,
+        _window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        cx.emit(DiffFileListEvent::FocusEditor);
+    }
+
     fn render_entry(
         &self,
         ix: usize,
@@ -331,6 +477,14 @@ impl Render for DiffFileList {
         v_flex()
             .key_context(self.dispatch_context())
             .track_focus(&self.focus_handle)
+            .on_action(cx.listener(Self::select_next))
+            .on_action(cx.listener(Self::select_previous))
+            .on_action(cx.listener(Self::select_first))
+            .on_action(cx.listener(Self::select_last))
+            .on_action(cx.listener(Self::confirm))
+            .on_action(cx.listener(Self::expand_selected_entry))
+            .on_action(cx.listener(Self::collapse_selected_entry))
+            .on_action(cx.listener(Self::focus_editor))
             .size_full()
             .overflow_hidden()
             .child(
