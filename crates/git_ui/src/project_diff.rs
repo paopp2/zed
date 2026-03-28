@@ -1045,7 +1045,8 @@ impl Item for ProjectDiff {
     fn tab_tooltip_text(&self, cx: &App) -> Option<SharedString> {
         match self.diff_base(cx) {
             DiffBase::Head => Some("Project Diff".into()),
-            DiffBase::Merge { .. } | DiffBase::Between { .. } => Some("Branch Diff".into()),
+            DiffBase::Merge { .. } => Some("Branch Diff".into()),
+            DiffBase::Between { .. } => Some("Ref Comparison".into()),
         }
     }
 

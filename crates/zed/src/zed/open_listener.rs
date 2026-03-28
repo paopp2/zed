@@ -474,9 +474,19 @@ pub async fn handle_cli_connection(
                 cwd,
                 env,
             } => {
-                let result = open_git_diff(from_ref, to_ref, cwd, env, app_state, cx).await;
-                let status = if result.is_err() { 1 } else { 0 };
-                responses.send(CliResponse::Exit { status }).log_err();
+                match open_git_diff(from_ref, to_ref, cwd, env, app_state, cx).await {
+                    Ok(()) => {
+                        responses.send(CliResponse::Exit { status: 0 }).log_err();
+                    }
+                    Err(e) => {
+                        responses
+                            .send(CliResponse::Stderr {
+                                message: format!("{e:#}"),
+                            })
+                            .log_err();
+                        responses.send(CliResponse::Exit { status: 1 }).log_err();
+                    }
+                };
             }
         }
     }

@@ -230,7 +230,6 @@ impl DiffFileList {
             }
             DiffFileEntry::File { name, depth, status, .. } => {
                 let label_color = status_color(status);
-                let entry = entry.clone();
 
                 h_flex()
                     .id(ElementId::Name(format!("diff-file-{ix}").into()))
@@ -253,7 +252,6 @@ impl DiffFileList {
                             .color(label_color),
                     )
                     .on_click(cx.listener(move |this, _: &ClickEvent, _window, cx| {
-                        let _ = &entry;
                         this.select_file(ix, cx);
                     }))
                     .into_any_element()
