@@ -2913,6 +2913,20 @@ impl GitStore {
                     base_ref: base_ref.into(),
                 }
             }
+            proto::git_diff::DiffType::Between => {
+                let from_ref = envelope
+                    .payload
+                    .from_ref
+                    .ok_or_else(|| anyhow!("from_ref is required for Between diff type"))?;
+                let to_ref = envelope
+                    .payload
+                    .to_ref
+                    .ok_or_else(|| anyhow!("to_ref is required for Between diff type"))?;
+                DiffType::Between {
+                    from_ref: from_ref.into(),
+                    to_ref: to_ref.into(),
+                }
+            }
         };
 
         let mut diff = repository_handle
@@ -6145,26 +6159,36 @@ impl Repository {
                     backend.diff(diff_type).await
                 }
                 RepositoryState::Remote(RemoteRepositoryState { project_id, client }) => {
-                    let (proto_diff_type, merge_base_ref) = match &diff_type {
+                    let mut proto_msg = proto::GitDiff {
+                        project_id: project_id.0,
+                        repository_id: id.to_proto(),
+                        diff_type: 0,
+                        merge_base_ref: None,
+                        from_ref: None,
+                        to_ref: None,
+                    };
+                    match &diff_type {
                         DiffType::HeadToIndex => {
-                            (proto::git_diff::DiffType::HeadToIndex.into(), None)
+                            proto_msg.diff_type =
+                                proto::git_diff::DiffType::HeadToIndex.into();
                         }
                         DiffType::HeadToWorktree => {
-                            (proto::git_diff::DiffType::HeadToWorktree.into(), None)
+                            proto_msg.diff_type =
+                                proto::git_diff::DiffType::HeadToWorktree.into();
                         }
-                        DiffType::MergeBase { base_ref } => (
-                            proto::git_diff::DiffType::MergeBase.into(),
-                            Some(base_ref.to_string()),
-                        ),
+                        DiffType::MergeBase { base_ref } => {
+                            proto_msg.diff_type =
+                                proto::git_diff::DiffType::MergeBase.into();
+                            proto_msg.merge_base_ref = Some(base_ref.to_string());
+                        }
+                        DiffType::Between { from_ref, to_ref } => {
+                            proto_msg.diff_type =
+                                proto::git_diff::DiffType::Between.into();
+                            proto_msg.from_ref = Some(from_ref.to_string());
+                            proto_msg.to_ref = Some(to_ref.to_string());
+                        }
                     };
-                    let response = client
-                        .request(proto::GitDiff {
-                            project_id: project_id.0,
-                            repository_id: id.to_proto(),
-                            diff_type: proto_diff_type,
-                            merge_base_ref,
-                        })
-                        .await?;
+                    let response = client.request(proto_msg).await?;
 
                     Ok(response.diff)
                 }

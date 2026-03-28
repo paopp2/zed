@@ -219,11 +219,14 @@ message GitDiff {
   uint64 repository_id = 3;
   DiffType diff_type = 4;
   optional string merge_base_ref = 5;
+  optional string from_ref = 6;
+  optional string to_ref = 7;
 
   enum DiffType {
     HEAD_TO_WORKTREE = 0;
     HEAD_TO_INDEX = 1;
     MERGE_BASE = 2;
+    BETWEEN = 3;
   }
 }
 
