@@ -699,6 +699,10 @@ pub trait GitRepository: Send + Sync {
 
     fn status(&self, path_prefixes: &[RepoPath]) -> Task<Result<GitStatus>>;
     fn diff_tree(&self, request: DiffTreeType) -> BoxFuture<'_, Result<TreeDiff>>;
+    fn diff_tree_stats(
+        &self,
+        request: DiffTreeType,
+    ) -> BoxFuture<'_, Result<crate::status::GitDiffStat>>;
 
     fn stash_entries(&self) -> BoxFuture<'_, Result<GitStash>>;
 
@@ -1555,6 +1559,46 @@ impl GitRepository for RealGitRepository {
                 } else {
                     let stderr = String::from_utf8_lossy(&output.stderr);
                     anyhow::bail!("git status failed: {stderr}");
+                }
+            })
+            .boxed()
+    }
+
+    fn diff_tree_stats(
+        &self,
+        request: DiffTreeType,
+    ) -> BoxFuture<'_, Result<crate::status::GitDiffStat>> {
+        let git = match self.git_binary() {
+            Ok(git) => git,
+            Err(e) => return Task::ready(Err(e)).boxed(),
+        };
+
+        let mut args = vec![
+            OsString::from("diff"),
+            OsString::from("--numstat"),
+            OsString::from("--no-renames"),
+        ];
+        match request {
+            DiffTreeType::MergeBase { base, head } => {
+                args.push("--merge-base".into());
+                args.push(OsString::from(base.as_str()));
+                args.push(OsString::from(head.as_str()));
+            }
+            DiffTreeType::Since { base, head } => {
+                args.push(OsString::from(base.as_str()));
+                args.push(OsString::from(head.as_str()));
+            }
+        }
+
+        self.executor
+            .spawn(async move {
+                let output = git.build_command(&args).output().await?;
+                if output.status.success() {
+                    let stdout = String::from_utf8_lossy(&output.stdout);
+                    Ok(crate::status::parse_numstat(&stdout))
+                } else {
+                    let stderr = String::from_utf8_lossy(&output.stderr);
+                    anyhow::bail!("git diff --numstat failed: {stderr}");
                 }
             })
             .boxed()

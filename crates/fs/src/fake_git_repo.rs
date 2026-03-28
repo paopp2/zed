@@ -192,6 +192,18 @@ impl GitRepository for FakeGitRepository {
         .boxed()
     }
 
+    fn diff_tree_stats(
+        &self,
+        _request: DiffTreeType,
+    ) -> BoxFuture<'_, Result<git::status::GitDiffStat>> {
+        async {
+            Ok(git::status::GitDiffStat {
+                entries: std::sync::Arc::new([]),
+            })
+        }
+        .boxed()
+    }
+
     fn revparse_batch(&self, revs: Vec<String>) -> BoxFuture<'_, Result<Vec<Option<String>>>> {
         self.with_state_async(false, |state| {
             Ok(revs

@@ -39,8 +39,8 @@ use git::{
     },
     stash::{GitStash, StashEntry},
     status::{
-        self, DiffStat, DiffTreeType, FileStatus, GitSummary, StatusCode, TrackedStatus, TreeDiff,
-        TreeDiffStatus, UnmergedStatus, UnmergedStatusCode,
+        self, DiffStat, DiffTreeType, FileStatus, GitDiffStat, GitSummary, StatusCode,
+        TrackedStatus, TreeDiff, TreeDiffStatus, UnmergedStatus, UnmergedStatusCode,
     },
 };
 use gpui::{
@@ -6282,6 +6282,23 @@ impl Repository {
 
                     Ok(TreeDiff { entries })
                 }
+            }
+        })
+    }
+
+    pub fn diff_tree_stats(
+        &mut self,
+        diff_type: DiffTreeType,
+        _cx: &App,
+    ) -> oneshot::Receiver<Result<GitDiffStat>> {
+        self.send_job(None, move |repo, _cx| async move {
+            match repo {
+                RepositoryState::Local(LocalRepositoryState { backend, .. }) => {
+                    backend.diff_tree_stats(diff_type).await
+                }
+                RepositoryState::Remote(_) => Ok(GitDiffStat {
+                    entries: Arc::new([]),
+                }),
             }
         })
     }
