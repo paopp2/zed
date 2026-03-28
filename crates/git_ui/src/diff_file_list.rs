@@ -4,8 +4,8 @@ use git::{
     status::TreeDiffStatus,
 };
 use gpui::{
-    App, ClickEvent, Context, EventEmitter, Render, SharedString,
-    UniformListScrollHandle, Window, uniform_list,
+    App, ClickEvent, Context, EventEmitter, FocusHandle, Focusable, KeyContext, Render,
+    ScrollStrategy, SharedString, UniformListScrollHandle, Window, uniform_list,
 };
 use std::ops::Range;
 use theme::ActiveTheme;
@@ -23,6 +23,7 @@ pub struct DiffFileList {
     expanded_dirs: collections::HashMap<RepoPath, bool>,
     selected_index: Option<usize>,
     scroll_handle: UniformListScrollHandle,
+    focus_handle: FocusHandle,
 }
 
 #[derive(Clone)]
@@ -51,14 +52,28 @@ struct TreeNode {
 
 impl EventEmitter<DiffFileListEvent> for DiffFileList {}
 
+impl Focusable for DiffFileList {
+    fn focus_handle(&self, _cx: &App) -> FocusHandle {
+        self.focus_handle.clone()
+    }
+}
+
 impl DiffFileList {
-    pub fn new(_cx: &mut Context<Self>) -> Self {
+    fn dispatch_context(&self) -> KeyContext {
+        let mut dispatch_context = KeyContext::new_with_defaults();
+        dispatch_context.add("DiffFileList");
+        dispatch_context.add("menu");
+        dispatch_context
+    }
+
+    pub fn new(cx: &mut Context<Self>) -> Self {
         Self {
             source_entries: collections::HashMap::default(),
             flattened: Vec::new(),
             expanded_dirs: collections::HashMap::default(),
             selected_index: None,
             scroll_handle: UniformListScrollHandle::new(),
+            focus_handle: cx.focus_handle(),
         }
     }
 
@@ -305,6 +320,8 @@ impl Render for DiffFileList {
         let entries = self.flattened.clone();
 
         v_flex()
+            .key_context(self.dispatch_context())
+            .track_focus(&self.focus_handle)
             .size_full()
             .overflow_hidden()
             .child(
