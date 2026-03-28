@@ -67,13 +67,16 @@ impl DiffFileList {
         entries: &collections::HashMap<RepoPath, TreeDiffStatus>,
         cx: &mut Context<Self>,
     ) {
+        if self.source_entries == *entries {
+            return;
+        }
         self.source_entries = entries.clone();
-        self.rebuild_flattened();
+        self.rebuild_flattened(entries);
         cx.notify();
     }
 
-    fn rebuild_flattened(&mut self) {
-        let mut sorted_entries: Vec<_> = self.source_entries.iter().collect();
+    fn rebuild_flattened(&mut self, entries: &collections::HashMap<RepoPath, TreeDiffStatus>) {
+        let mut sorted_entries: Vec<_> = entries.iter().collect();
         sorted_entries.sort_by(|(a, _), (b, _)| a.cmp(b));
 
         let mut root = TreeNode::default();
@@ -171,7 +174,8 @@ impl DiffFileList {
     fn toggle_directory(&mut self, path: &RepoPath, cx: &mut Context<Self>) {
         let expanded = self.expanded_dirs.entry(path.clone()).or_insert(true);
         *expanded = !*expanded;
-        self.rebuild_flattened();
+        let entries = self.source_entries.clone();
+        self.rebuild_flattened(&entries);
         cx.notify();
     }
 

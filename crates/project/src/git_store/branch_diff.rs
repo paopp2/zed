@@ -28,16 +28,6 @@ pub enum DiffBase {
     Between { from_ref: SharedString, to_ref: SharedString },
 }
 
-impl DiffBase {
-    pub fn is_merge_base(&self) -> bool {
-        matches!(self, DiffBase::Merge { .. })
-    }
-
-    pub fn is_between(&self) -> bool {
-        matches!(self, DiffBase::Between { .. })
-    }
-}
-
 pub struct BranchDiff {
     diff_base: DiffBase,
     repo: Option<Entity<Repository>>,
@@ -381,7 +371,6 @@ impl BranchDiff {
                             continue;
                         };
                         let task = Self::load_buffer(
-                            &self.diff_base,
                             branch_diff,
                             project_path,
                             repo.clone(),
@@ -409,7 +398,6 @@ impl BranchDiff {
                             continue;
                         };
                         let task = Self::load_buffer(
-                            &self.diff_base,
                             Some(branch_diff.clone()),
                             project_path,
                             repo.clone(),
@@ -437,16 +425,8 @@ impl BranchDiff {
         repo: Entity<Repository>,
         cx: &Context<'_, Project>,
     ) -> Task<Result<(Entity<Buffer>, Entity<BufferDiff>)>> {
-        let base_oid = match &branch_diff_status {
-            TreeDiffStatus::Modified { old, .. }
-            | TreeDiffStatus::Deleted { old } => Some(*old),
-            TreeDiffStatus::Added { .. } => None,
-        };
-        let head_oid = match &branch_diff_status {
-            TreeDiffStatus::Modified { new, .. }
-            | TreeDiffStatus::Added { new } => Some(*new),
-            TreeDiffStatus::Deleted { .. } => None,
-        };
+        let base_oid = branch_diff_status.old_oid();
+        let head_oid = branch_diff_status.new_oid();
         cx.spawn(async move |project, cx| {
             project
                 .update(cx, |project, cx| {
@@ -467,44 +447,31 @@ impl BranchDiff {
     }
 
     fn load_buffer(
-        diff_base: &DiffBase,
         branch_diff: Option<git::status::TreeDiffStatus>,
         project_path: crate::ProjectPath,
         repo: Entity<Repository>,
         cx: &Context<'_, Project>,
     ) -> Task<Result<(Entity<Buffer>, Entity<BufferDiff>)>> {
-        let diff_base = diff_base.clone();
         cx.spawn(async move |project, cx| {
             let buffer = project
                 .update(cx, |project, cx| project.open_buffer(project_path, cx))?
                 .await?;
 
-            let changes = match &diff_base {
-                DiffBase::Between { .. } => {
-                    anyhow::bail!("Between mode should use load_buffer_between");
-                }
-                _ => {
-                    if let Some(entry) = branch_diff {
-                        let oid = match entry {
-                            TreeDiffStatus::Added { .. } => None,
-                            TreeDiffStatus::Modified { old, .. }
-                            | TreeDiffStatus::Deleted { old } => Some(old),
-                        };
-                        project
-                            .update(cx, |project, cx| {
-                                project.git_store().update(cx, |git_store, cx| {
-                                    git_store.open_diff_since(oid, buffer.clone(), repo, cx)
-                                })
-                            })?
-                            .await?
-                    } else {
-                        project
-                            .update(cx, |project, cx| {
-                                project.open_uncommitted_diff(buffer.clone(), cx)
-                            })?
-                            .await?
-                    }
-                }
+            let changes = if let Some(entry) = branch_diff {
+                let oid = entry.old_oid();
+                project
+                    .update(cx, |project, cx| {
+                        project.git_store().update(cx, |git_store, cx| {
+                            git_store.open_diff_since(oid, buffer.clone(), repo, cx)
+                        })
+                    })?
+                    .await?
+            } else {
+                project
+                    .update(cx, |project, cx| {
+                        project.open_uncommitted_diff(buffer.clone(), cx)
+                    })?
+                    .await?
             };
             Ok((buffer, changes))
         })
