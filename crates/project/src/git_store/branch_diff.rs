@@ -4,7 +4,10 @@ use collections::HashSet;
 use futures::StreamExt;
 use git::{
     repository::RepoPath,
-    status::{DiffTreeType, FileStatus, StatusCode, TrackedStatus, TreeDiff, TreeDiffStatus},
+    status::{
+        DiffStat, DiffTreeType, FileStatus, StatusCode, TrackedStatus, TreeDiff,
+        TreeDiffStatus,
+    },
 };
 use gpui::{
     App, AsyncWindowContext, Context, Entity, EventEmitter, SharedString, Subscription, Task,
@@ -35,6 +38,7 @@ pub struct BranchDiff {
     base_commit: Option<SharedString>,
     head_commit: Option<SharedString>,
     tree_diff: Option<TreeDiff>,
+    tree_diff_stats: Option<collections::HashMap<RepoPath, DiffStat>>,
     _subscription: Subscription,
     update_needed: postage::watch::Sender<()>,
     _task: Task<()>,
@@ -93,6 +97,7 @@ impl BranchDiff {
             repo,
             project,
             tree_diff: None,
+            tree_diff_stats: None,
             base_commit: None,
             head_commit: None,
             _subscription: git_store_subscription,
@@ -109,9 +114,14 @@ impl BranchDiff {
         self.tree_diff.as_ref()
     }
 
+    pub fn tree_diff_stats(&self) -> Option<&collections::HashMap<RepoPath, DiffStat>> {
+        self.tree_diff_stats.as_ref()
+    }
+
     pub fn set_repo(&mut self, repo: Option<Entity<Repository>>, cx: &mut Context<Self>) {
         self.repo = repo;
         self.tree_diff = None;
+        self.tree_diff_stats = None;
         self.base_commit = None;
         self.head_commit = None;
         cx.emit(BranchDiffEvent::FileListChanged);
@@ -287,29 +297,55 @@ impl BranchDiff {
         this: WeakEntity<Self>,
         cx: &mut AsyncWindowContext,
     ) -> Result<()> {
-        let task = this.update(cx, |this, cx| {
-            let diff_tree_type = match this.diff_base.clone() {
+        let tasks = this.update(cx, |this, cx| {
+            let (is_merge, base, head) = match this.diff_base.clone() {
                 DiffBase::Head => return None,
-                DiffBase::Merge { base_ref } => DiffTreeType::MergeBase {
-                    base: base_ref,
-                    head: "HEAD".into(),
-                },
-                DiffBase::Between { from_ref, to_ref } => DiffTreeType::Since {
-                    base: from_ref,
-                    head: to_ref,
-                },
+                DiffBase::Merge { base_ref } => {
+                    (true, base_ref, SharedString::from("HEAD"))
+                }
+                DiffBase::Between { from_ref, to_ref } => (false, from_ref, to_ref),
             };
             let Some(repo) = this.repo.as_ref() else {
                 this.tree_diff.take();
+                this.tree_diff_stats.take();
                 return None;
             };
-            repo.update(cx, |repo, cx| Some(repo.diff_tree(diff_tree_type, cx)))
+            let tree_type = if is_merge {
+                DiffTreeType::MergeBase {
+                    base: base.clone(),
+                    head: head.clone(),
+                }
+            } else {
+                DiffTreeType::Since {
+                    base: base.clone(),
+                    head: head.clone(),
+                }
+            };
+            let stats_type = if is_merge {
+                DiffTreeType::MergeBase { base, head }
+            } else {
+                DiffTreeType::Since { base, head }
+            };
+            repo.update(cx, |repo, cx| {
+                let tree_task = repo.diff_tree(tree_type, cx);
+                let stats_task = repo.diff_tree_stats(stats_type, cx);
+                Some((tree_task, stats_task))
+            })
         })?;
-        let Some(task) = task else { return Ok(()) };
+        let Some((tree_task, stats_task)) = tasks else {
+            return Ok(());
+        };
 
-        let diff = task.await??;
+        let (diff, stats) = futures::future::join(tree_task, stats_task).await;
+        let diff = diff??;
+        let stats_map = stats
+            .ok()
+            .and_then(|r| r.ok())
+            .map(|s| s.entries.iter().cloned().collect::<collections::HashMap<_, _>>());
+
         this.update(cx, |this, cx| {
             this.tree_diff = Some(diff);
+            this.tree_diff_stats = stats_map;
             cx.emit(BranchDiffEvent::FileListChanged);
             cx.notify();
         })
