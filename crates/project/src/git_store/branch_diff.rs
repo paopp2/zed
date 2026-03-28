@@ -223,7 +223,7 @@ impl BranchDiff {
             // but *does not* exist in work-tree
             (Some(diff_from_head), Some(diff_from_merge_base)) if diff_from_head.is_deleted() => {
                 match diff_from_merge_base {
-                    TreeDiffStatus::Added => None, // unchanged, didn't exist in merge base or worktree
+                    TreeDiffStatus::Added { .. } => None, // unchanged, didn't exist in merge base or worktree
                     _ => Some(diff_from_head),
                 }
             }
@@ -237,7 +237,7 @@ impl BranchDiff {
                         _ => StatusCode::Modified,
                     },
                     worktree_status: match tree_status {
-                        TreeDiffStatus::Added => StatusCode::Added,
+                        TreeDiffStatus::Added { .. } => StatusCode::Added,
                         _ => StatusCode::Modified,
                     },
                 }))
