@@ -250,15 +250,19 @@ impl DiffFileList {
         }
     }
 
-    fn select_file(&mut self, index: usize, cx: &mut Context<Self>) {
+    fn set_selection(&mut self, index: usize, cx: &mut Context<Self>) {
         self.selected_index = Some(index);
         self.scroll_to_selected_entry();
+        cx.notify();
+    }
+
+    fn select_file(&mut self, index: usize, cx: &mut Context<Self>) {
+        self.set_selection(index, cx);
         if let Some(DiffFileEntry::File { repo_path, .. }) = self.flattened.get(index) {
             cx.emit(DiffFileListEvent::FileSelected {
                 repo_path: repo_path.clone(),
             });
         }
-        cx.notify();
     }
 
     fn select_next(
@@ -274,9 +278,7 @@ impl DiffFileList {
             Some(ix) => (ix + 1).min(self.flattened.len() - 1),
             None => 0,
         };
-        self.selected_index = Some(new_index);
-        self.scroll_to_selected_entry();
-        cx.notify();
+        self.set_selection(new_index, cx);
     }
 
     fn select_previous(
@@ -292,9 +294,7 @@ impl DiffFileList {
             Some(ix) => ix.saturating_sub(1),
             None => 0,
         };
-        self.selected_index = Some(new_index);
-        self.scroll_to_selected_entry();
-        cx.notify();
+        self.set_selection(new_index, cx);
     }
 
     fn select_first(
@@ -303,12 +303,9 @@ impl DiffFileList {
         _window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        if self.flattened.is_empty() {
-            return;
+        if !self.flattened.is_empty() {
+            self.set_selection(0, cx);
         }
-        self.selected_index = Some(0);
-        self.scroll_to_selected_entry();
-        cx.notify();
     }
 
     fn select_last(
@@ -317,12 +314,9 @@ impl DiffFileList {
         _window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        if self.flattened.is_empty() {
-            return;
+        if !self.flattened.is_empty() {
+            self.set_selection(self.flattened.len() - 1, cx);
         }
-        self.selected_index = Some(self.flattened.len() - 1);
-        self.scroll_to_selected_entry();
-        cx.notify();
     }
 
     fn confirm(
