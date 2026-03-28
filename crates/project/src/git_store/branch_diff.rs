@@ -18,7 +18,7 @@ use ztracing::instrument;
 
 use crate::{
     Project,
-    git_store::{GitStoreEvent, Repository, RepositoryEvent},
+    git_store::{GitStoreEvent, LocalRepositoryState, Repository, RepositoryEvent, RepositoryState},
 };
 
 #[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
@@ -135,8 +135,9 @@ impl BranchDiff {
     ) {
         Self::reload_tree_diff(this.clone(), cx).await.log_err();
         while recv.next().await.is_some() {
-            let Ok(needs_update) = this.update(cx, |this, cx| {
+            let Ok(update_info) = this.update(cx, |this, cx| {
                 let mut needs_update = false;
+                let mut between_check = None;
 
                 if this.repo.is_none() {
                     let active_repo = this
@@ -170,15 +171,46 @@ impl BranchDiff {
                                 needs_update = true;
                             }
                         }
-                        DiffBase::Between { .. } => {
-                            needs_update = true;
+                        DiffBase::Between { from_ref, to_ref } => {
+                            between_check = Some((
+                                from_ref.clone(),
+                                to_ref.clone(),
+                                repo.repository_state.clone(),
+                            ));
                         }
                     })
                 }
-                needs_update
+                (needs_update, between_check)
             }) else {
                 return;
             };
+
+            let (mut needs_update, between_check) = update_info;
+
+            if let Some((from_ref, to_ref, repository_state)) = between_check {
+                if let Ok(RepositoryState::Local(LocalRepositoryState { backend, .. })) =
+                    repository_state.await
+                {
+                    if let Ok(resolved) = backend
+                        .revparse_batch(vec![from_ref.to_string(), to_ref.to_string()])
+                        .await
+                    {
+                        let resolved_from = resolved.first().and_then(|s| s.clone());
+                        let resolved_to = resolved.get(1).and_then(|s| s.clone());
+                        let new_base: Option<SharedString> = resolved_from.map(Into::into);
+                        let new_head: Option<SharedString> = resolved_to.map(Into::into);
+
+                        this.update(cx, |this, _| {
+                            if this.base_commit != new_base || this.head_commit != new_head {
+                                this.base_commit = new_base;
+                                this.head_commit = new_head;
+                                needs_update = true;
+                            }
+                        })
+                        .log_err();
+                    }
+                }
+            }
 
             if needs_update {
                 Self::reload_tree_diff(this.clone(), cx).await.log_err();
@@ -449,7 +481,7 @@ impl BranchDiff {
 
             let changes = match &diff_base {
                 DiffBase::Between { .. } => {
-                    unreachable!("Between mode should use load_buffer_between")
+                    anyhow::bail!("Between mode should use load_buffer_between");
                 }
                 _ => {
                     if let Some(entry) = branch_diff {
