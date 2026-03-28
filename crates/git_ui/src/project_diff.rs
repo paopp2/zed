@@ -550,14 +550,14 @@ impl ProjectDiff {
 
     fn sync_file_list(&self, cx: &mut Context<Self>) {
         if let Some(file_list) = &self.file_list {
-            let tree_entries = self
-                .branch_diff
-                .read(cx)
+            let branch_diff = self.branch_diff.read(cx);
+            let tree_entries = branch_diff
                 .tree_diff()
                 .map(|diff| diff.entries.clone());
+            let stats = branch_diff.tree_diff_stats().cloned();
             if let Some(entries) = tree_entries {
                 file_list.update(cx, |list, cx| {
-                    list.update_entries(&entries, cx);
+                    list.update_entries(&entries, stats.as_ref(), cx);
                 });
             }
         }
