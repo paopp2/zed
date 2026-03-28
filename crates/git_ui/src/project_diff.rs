@@ -1,5 +1,6 @@
 use crate::{
     conflict_view::ConflictAddon,
+    diff_file_list::{DiffFileList, DiffFileListEvent},
     git_panel::{GitPanel, GitPanelAddon, GitStatusEntry},
     git_panel_settings::GitPanelSettings,
     resolve_active_repository,
@@ -76,6 +77,7 @@ pub struct ProjectDiff {
     focus_handle: FocusHandle,
     pending_scroll: Option<PathKey>,
     review_comment_count: usize,
+    file_list: Option<Entity<DiffFileList>>,
     _task: Task<Result<()>>,
     _subscription: Subscription,
 }
@@ -462,10 +464,52 @@ impl ProjectDiff {
         })
         .detach();
 
+        let is_branch_diff = matches!(
+            branch_diff.read(cx).diff_base(),
+            DiffBase::Merge { .. } | DiffBase::Between { .. }
+        );
+        let file_list = if is_branch_diff {
+            let file_list = cx.new(|cx| DiffFileList::new(cx));
+            let tree_entries = branch_diff
+                .read(cx)
+                .tree_diff()
+                .map(|diff| diff.entries.clone());
+            if let Some(entries) = tree_entries {
+                file_list.update(cx, |list, cx| {
+                    list.update_entries(&entries, cx);
+                });
+            }
+            Some(file_list)
+        } else {
+            None
+        };
+
+        let file_list_subscription = file_list.as_ref().map(|file_list| {
+            cx.subscribe_in(file_list, window, |this, _file_list, event: &DiffFileListEvent, window, cx| {
+                match event {
+                    DiffFileListEvent::FileSelected { repo_path } => {
+                        let path_key = PathKey::with_sort_prefix(
+                            TRACKED_SORT_PREFIX,
+                            repo_path.as_ref().clone(),
+                        );
+                        this.move_to_path(path_key, window, cx);
+                    }
+                }
+            })
+        });
+
         let task = window.spawn(cx, {
             let this = cx.weak_entity();
             async |cx| Self::refresh(this, RefreshReason::StatusesChanged, cx).await
         });
+
+        let mut subscriptions = Subscription::join(
+            branch_diff_subscription,
+            Subscription::join(editor_subscription, review_comment_subscription),
+        );
+        if let Some(file_list_sub) = file_list_subscription {
+            subscriptions = Subscription::join(subscriptions, file_list_sub);
+        }
 
         Self {
             project,
@@ -477,11 +521,9 @@ impl ProjectDiff {
             buffer_diff_subscriptions: Default::default(),
             pending_scroll: None,
             review_comment_count: 0,
+            file_list,
             _task: task,
-            _subscription: Subscription::join(
-                branch_diff_subscription,
-                Subscription::join(editor_subscription, review_comment_subscription),
-            ),
+            _subscription: subscriptions,
         }
     }
 
@@ -900,6 +942,18 @@ impl ProjectDiff {
                         .update(cx, |editor, cx| editor.fold_buffers(buffers_to_fold, cx));
                 });
             }
+            if let Some(file_list) = &this.file_list {
+                let tree_entries = this
+                    .branch_diff
+                    .read(cx)
+                    .tree_diff()
+                    .map(|diff| diff.entries.clone());
+                if let Some(entries) = tree_entries {
+                    file_list.update(cx, |list, cx| {
+                        list.update_entries(&entries, cx);
+                    });
+                }
+            }
             this.pending_scroll.take();
             cx.notify();
         })?;
@@ -1211,7 +1265,25 @@ impl Render for ProjectDiff {
                         ),
                 )
             })
-            .when(!is_empty, |el| el.child(self.editor.clone()))
+            .when(!is_empty, |el| {
+                if let Some(file_list) = &self.file_list {
+                    el.child(
+                        h_flex()
+                            .size_full()
+                            .child(
+                                div()
+                                    .w(px(250.))
+                                    .h_full()
+                                    .border_r_1()
+                                    .border_color(cx.theme().colors().border_variant)
+                                    .child(file_list.clone()),
+                            )
+                            .child(div().flex_1().size_full().child(self.editor.clone())),
+                    )
+                } else {
+                    el.child(self.editor.clone())
+                }
+            })
     }
 }
 

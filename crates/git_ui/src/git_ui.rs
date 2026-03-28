@@ -10,6 +10,7 @@ use ui::{
 
 mod blame_ui;
 pub mod clone;
+pub mod diff_file_list;
 
 use git::{
     repository::{Branch, Upstream, UpstreamTracking, UpstreamTrackingStatus},
