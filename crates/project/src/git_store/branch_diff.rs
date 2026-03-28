@@ -1,4 +1,4 @@
-use anyhow::{Context as _, Result};
+use anyhow::Result;
 use buffer_diff::BufferDiff;
 use collections::HashSet;
 use futures::StreamExt;
@@ -307,15 +307,9 @@ impl BranchDiff {
                         return;
                     };
                     for (path, branch_diff) in tree_diff.entries.iter() {
-                        let Some(project_path) =
-                            repo.read(cx).repo_path_to_project_path(path, cx)
-                        else {
-                            continue;
-                        };
-                        let task = Self::load_buffer(
-                            &self.diff_base,
-                            Some(branch_diff.clone()),
-                            project_path,
+                        let task = Self::load_buffer_between(
+                            branch_diff.clone(),
+                            path.clone(),
                             repo.clone(),
                             cx,
                         );
@@ -401,6 +395,41 @@ impl BranchDiff {
     }
 
     #[instrument(skip_all)]
+    fn load_buffer_between(
+        branch_diff_status: TreeDiffStatus,
+        repo_path: RepoPath,
+        repo: Entity<Repository>,
+        cx: &Context<'_, Project>,
+    ) -> Task<Result<(Entity<Buffer>, Entity<BufferDiff>)>> {
+        let base_oid = match &branch_diff_status {
+            TreeDiffStatus::Modified { old, .. }
+            | TreeDiffStatus::Deleted { old } => Some(*old),
+            TreeDiffStatus::Added { .. } => None,
+        };
+        let head_oid = match &branch_diff_status {
+            TreeDiffStatus::Modified { new, .. }
+            | TreeDiffStatus::Added { new } => Some(*new),
+            TreeDiffStatus::Deleted { .. } => None,
+        };
+        cx.spawn(async move |project, cx| {
+            project
+                .update(cx, |project, cx| {
+                    let language_registry = project.languages().clone();
+                    project.git_store().update(cx, |git_store, cx| {
+                        git_store.open_diff_between(
+                            base_oid,
+                            head_oid,
+                            &repo_path,
+                            language_registry,
+                            repo,
+                            cx,
+                        )
+                    })
+                })?
+                .await
+        })
+    }
+
     fn load_buffer(
         diff_base: &DiffBase,
         branch_diff: Option<git::status::TreeDiffStatus>,
@@ -409,35 +438,21 @@ impl BranchDiff {
         cx: &Context<'_, Project>,
     ) -> Task<Result<(Entity<Buffer>, Entity<BufferDiff>)>> {
         let diff_base = diff_base.clone();
-        let task = cx.spawn(async move |project, cx| {
+        cx.spawn(async move |project, cx| {
             let buffer = project
                 .update(cx, |project, cx| project.open_buffer(project_path, cx))?
                 .await?;
 
             let changes = match &diff_base {
                 DiffBase::Between { .. } => {
-                    let entry = branch_diff.context(
-                        "Between mode requires a tree diff entry",
-                    )?;
-                    let _base_oid = match &entry {
-                        git::status::TreeDiffStatus::Modified { old, .. }
-                        | git::status::TreeDiffStatus::Deleted { old } => Some(*old),
-                        git::status::TreeDiffStatus::Added { .. } => None,
-                    };
-                    let _head_oid = match &entry {
-                        git::status::TreeDiffStatus::Modified { new, .. }
-                        | git::status::TreeDiffStatus::Added { new } => Some(*new),
-                        git::status::TreeDiffStatus::Deleted { .. } => None,
-                    };
-                    // TODO: Wire to git_store.open_diff_between() in Task 5
-                    anyhow::bail!("Between mode buffer loading not yet implemented")
+                    unreachable!("Between mode should use load_buffer_between")
                 }
                 _ => {
                     if let Some(entry) = branch_diff {
                         let oid = match entry {
-                            git::status::TreeDiffStatus::Added { .. } => None,
-                            git::status::TreeDiffStatus::Modified { old, .. }
-                            | git::status::TreeDiffStatus::Deleted { old } => Some(old),
+                            TreeDiffStatus::Added { .. } => None,
+                            TreeDiffStatus::Modified { old, .. }
+                            | TreeDiffStatus::Deleted { old } => Some(old),
                         };
                         project
                             .update(cx, |project, cx| {
@@ -456,8 +471,7 @@ impl BranchDiff {
                 }
             };
             Ok((buffer, changes))
-        });
-        task
+        })
     }
 }
 
