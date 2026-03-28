@@ -298,37 +298,25 @@ impl BranchDiff {
         cx: &mut AsyncWindowContext,
     ) -> Result<()> {
         let tasks = this.update(cx, |this, cx| {
-            let (is_merge, base, head) = match this.diff_base.clone() {
+            let diff_tree_type = match this.diff_base.clone() {
                 DiffBase::Head => return None,
-                DiffBase::Merge { base_ref } => {
-                    (true, base_ref, SharedString::from("HEAD"))
-                }
-                DiffBase::Between { from_ref, to_ref } => (false, from_ref, to_ref),
+                DiffBase::Merge { base_ref } => DiffTreeType::MergeBase {
+                    base: base_ref,
+                    head: "HEAD".into(),
+                },
+                DiffBase::Between { from_ref, to_ref } => DiffTreeType::Since {
+                    base: from_ref,
+                    head: to_ref,
+                },
             };
             let Some(repo) = this.repo.as_ref() else {
                 this.tree_diff.take();
                 this.tree_diff_stats.take();
                 return None;
             };
-            let tree_type = if is_merge {
-                DiffTreeType::MergeBase {
-                    base: base.clone(),
-                    head: head.clone(),
-                }
-            } else {
-                DiffTreeType::Since {
-                    base: base.clone(),
-                    head: head.clone(),
-                }
-            };
-            let stats_type = if is_merge {
-                DiffTreeType::MergeBase { base, head }
-            } else {
-                DiffTreeType::Since { base, head }
-            };
             repo.update(cx, |repo, cx| {
-                let tree_task = repo.diff_tree(tree_type, cx);
-                let stats_task = repo.diff_tree_stats(stats_type, cx);
+                let tree_task = repo.diff_tree(diff_tree_type.clone(), cx);
+                let stats_task = repo.diff_tree_stats(diff_tree_type, cx);
                 Some((tree_task, stats_task))
             })
         })?;
@@ -340,7 +328,7 @@ impl BranchDiff {
         let diff = diff??;
         let stats_map = stats
             .ok()
-            .and_then(|r| r.ok())
+            .and_then(|r| r.log_err())
             .map(|s| s.entries.iter().cloned().collect::<collections::HashMap<_, _>>());
 
         this.update(cx, |this, cx| {
