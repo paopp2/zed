@@ -115,6 +115,10 @@ impl BranchDiff {
         &self.diff_base
     }
 
+    pub fn tree_diff(&self) -> Option<&TreeDiff> {
+        self.tree_diff.as_ref()
+    }
+
     pub fn set_repo(&mut self, repo: Option<Entity<Repository>>, cx: &mut Context<Self>) {
         self.repo = repo;
         self.tree_diff = None;
