@@ -532,8 +532,8 @@ pub struct TreeDiff {
 
 #[derive(Debug, Clone, PartialEq)]
 pub enum TreeDiffStatus {
-    Added,
-    Modified { old: Oid },
+    Added { new: Oid },
+    Modified { old: Oid, new: Oid },
     Deleted { old: Oid },
 }
 
@@ -552,9 +552,11 @@ impl FromStr for TreeDiff {
                 .ok_or_else(|| anyhow!("expected to find old_sha"))?
                 .to_owned()
                 .parse()?;
-            let _new_sha = fields
+            let new_sha = fields
                 .next()
-                .ok_or_else(|| anyhow!("expected to find new_sha"))?;
+                .ok_or_else(|| anyhow!("expected to find new_sha"))?
+                .to_owned()
+                .parse()?;
             let status = fields
                 .next()
                 .and_then(|s| {
@@ -567,8 +569,8 @@ impl FromStr for TreeDiff {
                 .ok_or_else(|| anyhow!("expected to find status"))?;
 
             let result = match StatusCode::from_byte(*status)? {
-                StatusCode::Modified => TreeDiffStatus::Modified { old: old_sha },
-                StatusCode::Added => TreeDiffStatus::Added,
+                StatusCode::Modified => TreeDiffStatus::Modified { old: old_sha, new: new_sha },
+                StatusCode::Added => TreeDiffStatus::Added { new: new_sha },
                 StatusCode::Deleted => TreeDiffStatus::Deleted { old: old_sha },
                 _status => continue,
             };
@@ -752,24 +754,50 @@ mod tests {
                 entries: [
                     (
                         RepoPath::new(".zed/settings.json").unwrap(),
-                        TreeDiffStatus::Added,
+                        TreeDiffStatus::Added {
+                            new: "0062c311b8727c3a2e3cd7a41bc9904feacf8f98".parse().unwrap()
+                        },
                     ),
                     (
                         RepoPath::new("README.md").unwrap(),
                         TreeDiffStatus::Deleted {
                             old: "bb3e9ed2e97a8c02545bae243264d342c069afb3".parse().unwrap()
-                        }
+                        },
                     ),
                     (
                         RepoPath::new("parallel.go").unwrap(),
                         TreeDiffStatus::Modified {
                             old: "42f097005a1f21eb2260fad02ec8c991282beee8".parse().unwrap(),
-                        }
+                            new: "a437d85f63bb8c62bd78f83f40c506631fabf005".parse().unwrap(),
+                        },
                     ),
                 ]
                 .into_iter()
                 .collect()
             }
         )
+    }
+
+    #[test]
+    fn test_tree_diff_preserves_new_oid() {
+        let input = ":100644 100644 aaaa000000000000000000000000000000000000 bbbb000000000000000000000000000000000000 M\x00src/main.rs\x00";
+        let output: TreeDiff = input.parse().unwrap();
+        match output
+            .entries
+            .get(&RepoPath::new("src/main.rs").unwrap())
+            .unwrap()
+        {
+            TreeDiffStatus::Modified { old, new } => {
+                assert_eq!(
+                    old.0.to_string(),
+                    "aaaa000000000000000000000000000000000000"
+                );
+                assert_eq!(
+                    new.0.to_string(),
+                    "bbbb000000000000000000000000000000000000"
+                );
+            }
+            other => panic!("Expected Modified, got {:?}", other),
+        }
     }
 }

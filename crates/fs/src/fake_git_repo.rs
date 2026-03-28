@@ -176,9 +176,9 @@ impl GitRepository for FakeGitRepository {
                     if original == content {
                         continue;
                     }
-                    TreeDiffStatus::Modified { old: *oid }
+                    TreeDiffStatus::Modified { old: *oid, new: Oid::default() }
                 } else {
-                    TreeDiffStatus::Added
+                    TreeDiffStatus::Added { new: Oid::default() }
                 };
                 entries.insert(path.clone(), status);
             }
