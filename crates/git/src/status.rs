@@ -498,6 +498,7 @@ impl Default for GitStatus {
     }
 }
 
+#[derive(Clone)]
 pub enum DiffTreeType {
     MergeBase {
         base: SharedString,

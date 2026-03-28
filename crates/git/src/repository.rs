@@ -1574,7 +1574,8 @@ impl GitRepository for RealGitRepository {
         };
 
         let mut args = vec![
-            OsString::from("diff"),
+            OsString::from("diff-tree"),
+            OsString::from("-r"),
             OsString::from("--numstat"),
             OsString::from("--no-renames"),
         ];
@@ -1598,7 +1599,7 @@ impl GitRepository for RealGitRepository {
                     Ok(crate::status::parse_numstat(&stdout))
                 } else {
                     let stderr = String::from_utf8_lossy(&output.stderr);
-                    anyhow::bail!("git diff --numstat failed: {stderr}");
+                    anyhow::bail!("git diff-tree --numstat failed: {stderr}");
                 }
             })
             .boxed()
