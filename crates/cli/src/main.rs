@@ -8,7 +8,7 @@
 )]
 
 use anyhow::{Context as _, Result};
-use clap::Parser;
+use clap::{Parser, Subcommand};
 use cli::{CliRequest, CliResponse, IpcHandshake, ipc::IpcOneShotServer};
 use parking_lot::Mutex;
 use std::{
@@ -140,6 +140,20 @@ struct Args {
     /// by having Zed act like netcat communicating over a Unix socket.
     #[arg(long, hide = true)]
     askpass: Option<String>,
+
+    #[command(subcommand)]
+    command: Option<Command>,
+}
+
+#[derive(Subcommand, Debug)]
+enum Command {
+    /// Compare two git refs (commits, branches, tags)
+    Diff {
+        /// The base ref to compare from
+        from_ref: String,
+        /// The target ref to compare to
+        to_ref: String,
+    },
 }
 
 /// Parses a path containing a position (e.g. `path:line:column`)
@@ -407,6 +421,44 @@ mod tests {
         .unwrap();
         assert_eq!(result, expected);
     }
+
+    #[test]
+    fn test_diff_subcommand_parsing() {
+        let args = Args::try_parse_from(["zed", "diff", "HEAD~3", "HEAD"]).unwrap();
+        match args.command {
+            Some(Command::Diff { from_ref, to_ref }) => {
+                assert_eq!(from_ref, "HEAD~3");
+                assert_eq!(to_ref, "HEAD");
+            }
+            _ => panic!("Expected Diff command"),
+        }
+    }
+
+    #[test]
+    fn test_diff_subcommand_with_branch_names() {
+        let args = Args::try_parse_from(["zed", "diff", "main", "feature-branch"]).unwrap();
+        match args.command {
+            Some(Command::Diff { from_ref, to_ref }) => {
+                assert_eq!(from_ref, "main");
+                assert_eq!(to_ref, "feature-branch");
+            }
+            _ => panic!("Expected Diff command"),
+        }
+    }
+
+    #[test]
+    fn test_existing_args_still_work() {
+        let args = Args::try_parse_from(["zed", "file.rs"]).unwrap();
+        assert!(args.command.is_none());
+        assert_eq!(args.paths_with_position, vec!["file.rs"]);
+    }
+
+    #[test]
+    fn test_no_args_still_work() {
+        let args = Args::try_parse_from(["zed"]).unwrap();
+        assert!(args.command.is_none());
+        assert!(args.paths_with_position.is_empty());
+    }
 }
 
 fn parse_path_in_wsl(source: &str, wsl: &str) -> Result<String> {
@@ -651,6 +703,8 @@ fn main() -> Result<()> {
         .build_global()
         .unwrap();
 
+    let command = args.command;
+
     let sender: JoinHandle<anyhow::Result<()>> = thread::Builder::new()
         .name("CliReceiver".to_string())
         .spawn({
@@ -660,24 +714,35 @@ fn main() -> Result<()> {
                 let (_, handshake) = server.accept().context("Handshake after Zed spawn")?;
                 let (tx, rx) = (handshake.requests, handshake.responses);
 
-                #[cfg(target_os = "windows")]
-                let wsl = args.wsl;
-                #[cfg(not(target_os = "windows"))]
-                let wsl = None;
+                if let Some(Command::Diff { from_ref, to_ref }) = command {
+                    tx.send(CliRequest::GitDiff {
+                        from_ref,
+                        to_ref,
+                        cwd: env::current_dir()
+                            .ok()
+                            .map(|p| p.to_string_lossy().into_owned()),
+                        env,
+                    })?;
+                } else {
+                    #[cfg(target_os = "windows")]
+                    let wsl = args.wsl;
+                    #[cfg(not(target_os = "windows"))]
+                    let wsl = None;
 
-                tx.send(CliRequest::Open {
-                    paths,
-                    urls,
-                    diff_paths,
-                    diff_all: diff_all_mode,
-                    wsl,
-                    wait: args.wait,
-                    open_new_workspace,
-                    reuse: args.reuse,
-                    env,
-                    user_data_dir: user_data_dir_for_thread,
-                    dev_container: args.dev_container,
-                })?;
+                    tx.send(CliRequest::Open {
+                        paths,
+                        urls,
+                        diff_paths,
+                        diff_all: diff_all_mode,
+                        wsl,
+                        wait: args.wait,
+                        open_new_workspace,
+                        reuse: args.reuse,
+                        env,
+                        user_data_dir: user_data_dir_for_thread,
+                        dev_container: args.dev_container,
+                    })?;
+                }
 
                 while let Ok(response) = rx.recv() {
                     match response {

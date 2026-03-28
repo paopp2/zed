@@ -13,7 +13,10 @@ use futures::channel::{mpsc, oneshot};
 use futures::future;
 
 use futures::{FutureExt, SinkExt, StreamExt};
-use git_ui::{file_diff_view::FileDiffView, multi_diff_view::MultiDiffView};
+use git_ui::{
+    file_diff_view::FileDiffView, multi_diff_view::MultiDiffView,
+    project_diff::ProjectDiff,
+};
 use gpui::{App, AsyncApp, Global, WindowHandle};
 use onboarding::FIRST_OPEN;
 use onboarding::show_onboarding_view;
@@ -465,8 +468,54 @@ pub async fn handle_cli_connection(
                 let status = if open_workspace_result.is_err() { 1 } else { 0 };
                 responses.send(CliResponse::Exit { status }).log_err();
             }
+            CliRequest::GitDiff {
+                from_ref,
+                to_ref,
+                cwd,
+                env,
+            } => {
+                let result = open_git_diff(from_ref, to_ref, cwd, env, app_state, cx).await;
+                let status = if result.is_err() { 1 } else { 0 };
+                responses.send(CliResponse::Exit { status }).log_err();
+            }
         }
     }
+}
+
+async fn open_git_diff(
+    from_ref: String,
+    to_ref: String,
+    cwd: Option<String>,
+    env: Option<collections::HashMap<String, String>>,
+    app_state: Arc<AppState>,
+    cx: &mut AsyncApp,
+) -> Result<()> {
+    let paths: Vec<String> = cwd.into_iter().collect();
+    let path_positions = derive_paths_with_position(app_state.fs.as_ref(), paths).await;
+
+    let open_options = OpenOptions {
+        env,
+        ..Default::default()
+    };
+
+    let (multi_workspace, _items) =
+        open_paths_with_positions(&path_positions, &[], false, app_state, open_options, cx).await?;
+
+    let diff_view = multi_workspace.update(cx, |multi_workspace, window, cx| {
+        let workspace = multi_workspace.workspace().clone();
+        let project = workspace.read(cx).project().clone();
+        ProjectDiff::new_between(from_ref.into(), to_ref.into(), project, workspace, window, cx)
+    })?;
+
+    let diff_view = diff_view.await?;
+
+    multi_workspace.update(cx, |multi_workspace, window, cx| {
+        multi_workspace.workspace().update(cx, |workspace, cx| {
+            workspace.add_item_to_active_pane(Box::new(diff_view), None, true, window, cx);
+        });
+    })?;
+
+    Ok(())
 }
 
 async fn open_workspaces(

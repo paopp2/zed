@@ -23,6 +23,12 @@ pub enum CliRequest {
         user_data_dir: Option<String>,
         dev_container: bool,
     },
+    GitDiff {
+        from_ref: String,
+        to_ref: String,
+        cwd: Option<String>,
+        env: Option<HashMap<String, String>>,
+    },
 }
 
 #[derive(Debug, Serialize, Deserialize)]
