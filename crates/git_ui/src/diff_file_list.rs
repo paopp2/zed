@@ -373,6 +373,7 @@ impl DiffFileList {
         &self,
         ix: usize,
         entry: &DiffFileEntry,
+        window: &Window,
         cx: &Context<Self>,
     ) -> AnyElement {
         let selected = self.selected_index == Some(ix);
@@ -397,6 +398,9 @@ impl DiffFileList {
                     .items_center()
                     .hover(|style| style.bg(colors.ghost_element_hover))
                     .when(selected, |this| this.bg(colors.ghost_element_selected))
+                    .when(selected && self.focus_handle.is_focused(window), |this| {
+                        this.border_1().border_color(colors.panel_focused_border)
+                    })
                     .child(
                         Icon::new(icon_name)
                             .size(IconSize::Small)
@@ -425,6 +429,9 @@ impl DiffFileList {
                     .items_center()
                     .hover(|style| style.bg(colors.ghost_element_hover))
                     .when(selected, |this| this.bg(colors.ghost_element_selected))
+                    .when(selected && self.focus_handle.is_focused(window), |this| {
+                        this.border_1().border_color(colors.panel_focused_border)
+                    })
                     .child(
                         Icon::new(status_icon_name(status))
                             .size(IconSize::Small)
@@ -503,11 +510,11 @@ impl Render for DiffFileList {
                 uniform_list(
                     "diff-file-list",
                     entry_count,
-                    cx.processor(move |this, range: Range<usize>, _window, cx| {
+                    cx.processor(move |this, range: Range<usize>, window, cx| {
                         range
                             .map(|ix| {
                                 let entry = &entries[ix];
-                                this.render_entry(ix, entry, cx)
+                                this.render_entry(ix, entry, window, cx)
                             })
                             .collect()
                     }),
