@@ -1052,6 +1052,20 @@
     },
   },
   {
+    "context": "DiffFileList",
+    "use_key_equivalents": true,
+    "bindings": {
+      "up": "menu::SelectPrevious",
+      "down": "menu::SelectNext",
+      "cmd-up": "menu::SelectFirst",
+      "cmd-down": "menu::SelectLast",
+      "left": "diff_file_list::CollapseSelectedEntry",
+      "right": "diff_file_list::ExpandSelectedEntry",
+      "enter": "menu::Confirm",
+      "escape": "diff_file_list::FocusEditor",
+    },
+  },
+  {
     "context": "GitPanel && CommitEditor",
     "use_key_equivalents": true,
     "bindings": {
