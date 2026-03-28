@@ -147,22 +147,28 @@ impl ProjectDiff {
 
     fn review_diff(&mut self, _: &ReviewDiff, window: &mut Window, cx: &mut Context<Self>) {
         let diff_base = self.diff_base(cx).clone();
-        let DiffBase::Merge { base_ref } = diff_base else {
-            return;
+        let (diff_type, label) = match &diff_base {
+            DiffBase::Merge { base_ref } => (
+                DiffType::MergeBase {
+                    base_ref: base_ref.clone(),
+                },
+                base_ref.to_string(),
+            ),
+            DiffBase::Between { from_ref, to_ref } => (
+                DiffType::Between {
+                    from_ref: from_ref.clone(),
+                    to_ref: to_ref.clone(),
+                },
+                format!("{}..{}", from_ref, to_ref),
+            ),
+            DiffBase::Head => return,
         };
 
         let Some(repo) = self.branch_diff.read(cx).repo().cloned() else {
             return;
         };
 
-        let diff_receiver = repo.update(cx, |repo, cx| {
-            repo.diff(
-                DiffType::MergeBase {
-                    base_ref: base_ref.clone(),
-                },
-                cx,
-            )
-        });
+        let diff_receiver = repo.update(cx, |repo, cx| repo.diff(diff_type, cx));
 
         let workspace = self.workspace.clone();
 
@@ -177,7 +183,7 @@ impl ProjectDiff {
                             window.dispatch_action(
                                 ReviewBranchDiff {
                                     diff_text: diff_text.into(),
-                                    base_ref: base_ref.to_string().into(),
+                                    base_ref: label.into(),
                                 }
                                 .boxed_clone(),
                                 cx,
@@ -317,6 +323,29 @@ impl ProjectDiff {
                     window,
                     cx,
                 )
+            })?;
+            cx.new_window_entity(|window, cx| {
+                Self::new_impl(branch_diff, project, workspace, window, cx)
+            })
+        })
+    }
+
+    pub fn new_between(
+        from_ref: SharedString,
+        to_ref: SharedString,
+        project: Entity<Project>,
+        workspace: Entity<Workspace>,
+        window: &mut Window,
+        cx: &mut App,
+    ) -> Task<Result<Entity<Self>>> {
+        let diff_base = DiffBase::Between {
+            from_ref,
+            to_ref,
+        };
+
+        window.spawn(cx, async move |cx| {
+            let branch_diff = cx.new_window_entity(|window, cx| {
+                branch_diff::BranchDiff::new(diff_base, project.clone(), window, cx)
             })?;
             cx.new_window_entity(|window, cx| {
                 Self::new_impl(branch_diff, project, workspace, window, cx)
@@ -1121,7 +1150,8 @@ impl Item for ProjectDiff {
 impl Render for ProjectDiff {
     fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let is_empty = self.multibuffer.read(cx).is_empty();
-        let is_branch_diff_view = matches!(self.diff_base(cx), DiffBase::Merge { .. });
+        let is_branch_diff_view =
+            matches!(self.diff_base(cx), DiffBase::Merge { .. } | DiffBase::Between { .. });
 
         div()
             .track_focus(&self.focus_handle)
@@ -1628,7 +1658,12 @@ impl ToolbarItemView for BranchDiffToolbar {
     ) -> ToolbarItemLocation {
         self.project_diff = active_pane_item
             .and_then(|item| item.act_as::<ProjectDiff>(cx))
-            .filter(|item| matches!(item.read(cx).diff_base(cx), DiffBase::Merge { .. }))
+            .filter(|item| {
+                matches!(
+                    item.read(cx).diff_base(cx),
+                    DiffBase::Merge { .. } | DiffBase::Between { .. }
+                )
+            })
             .map(|entity| entity.downgrade());
         if self.project_diff.is_some() {
             ToolbarItemLocation::PrimaryRight
