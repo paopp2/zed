@@ -179,6 +179,16 @@ impl DiffFileList {
         cx.notify();
     }
 
+    pub fn select_by_path(&mut self, path: &RepoPath, cx: &mut Context<Self>) {
+        let index = self.flattened.iter().position(|entry| {
+            matches!(entry, DiffFileEntry::File { repo_path, .. } if repo_path == path)
+        });
+        if index != self.selected_index {
+            self.selected_index = index;
+            cx.notify();
+        }
+    }
+
     fn select_file(&mut self, index: usize, cx: &mut Context<Self>) {
         self.selected_index = Some(index);
         if let Some(DiffFileEntry::File { repo_path, .. }) = self.flattened.get(index) {

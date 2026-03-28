@@ -19,7 +19,7 @@ use git::repository::DiffType;
 
 use git::{
     Commit, StageAll, StageAndNext, ToggleStaged, UnstageAll, UnstageAndNext, repository::RepoPath,
-    status::FileStatus,
+    status::{FileStatus, StatusCode, TrackedStatus},
 };
 use gpui::{
     Action, AnyElement, App, AppContext as _, AsyncWindowContext, Entity, EventEmitter,
@@ -478,8 +478,29 @@ impl ProjectDiff {
             cx.subscribe_in(file_list, window, |this, _file_list, event: &DiffFileListEvent, window, cx| {
                 match event {
                     DiffFileListEvent::FileSelected { repo_path } => {
+                        let branch_diff = this.branch_diff.read(cx);
+                        let is_added = branch_diff.tree_diff()
+                            .and_then(|td| td.entries.get(repo_path))
+                            .map(|s| matches!(s, git::status::TreeDiffStatus::Added { .. }))
+                            .unwrap_or(false);
+                        let sort_prefix = if let Some(repo) = branch_diff.repo() {
+                            let status = if is_added {
+                                FileStatus::Tracked(TrackedStatus {
+                                    index_status: StatusCode::Added,
+                                    worktree_status: StatusCode::Added,
+                                })
+                            } else {
+                                FileStatus::Tracked(TrackedStatus {
+                                    index_status: StatusCode::Modified,
+                                    worktree_status: StatusCode::Modified,
+                                })
+                            };
+                            sort_prefix(repo.read(cx), repo_path, status, cx)
+                        } else {
+                            TRACKED_SORT_PREFIX
+                        };
                         let path_key = PathKey::with_sort_prefix(
-                            TRACKED_SORT_PREFIX,
+                            sort_prefix,
                             repo_path.as_ref().clone(),
                         );
                         this.move_to_path(path_key, window, cx);
@@ -711,6 +732,12 @@ impl ProjectDiff {
                 let Some(project_path) = self.active_path(cx) else {
                     return;
                 };
+                if let Some(file_list) = &self.file_list {
+                    let repo_path = RepoPath::from_rel_path(project_path.path.as_ref());
+                    file_list.update(cx, |list, cx| {
+                        list.select_by_path(&repo_path, cx);
+                    });
+                }
                 self.workspace
                     .update(cx, |workspace, cx| {
                         if let Some(git_panel) = workspace.panel::<GitPanel>(cx) {

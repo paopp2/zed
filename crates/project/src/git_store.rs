@@ -48,7 +48,7 @@ use gpui::{
     WeakEntity,
 };
 use language::{
-    Buffer, BufferEvent, Capability, Language, LanguageRegistry,
+    Buffer, BufferEvent, Capability, DiskState, Language, LanguageRegistry,
     proto::{deserialize_version, serialize_version},
 };
 use parking_lot::Mutex;
@@ -89,6 +89,60 @@ use worktree::{
     UpdatedGitRepositoriesSet, UpdatedGitRepository, Worktree,
 };
 use zeroize::Zeroize;
+
+struct DiffBlob {
+    path: RepoPath,
+    worktree_id: WorktreeId,
+    is_deleted: bool,
+}
+
+impl language::File for DiffBlob {
+    fn as_local(&self) -> Option<&dyn language::LocalFile> {
+        None
+    }
+
+    fn disk_state(&self) -> DiskState {
+        DiskState::Historic {
+            was_deleted: self.is_deleted,
+        }
+    }
+
+    fn path_style(&self, _: &App) -> PathStyle {
+        PathStyle::local()
+    }
+
+    fn path(&self) -> &Arc<RelPath> {
+        self.path.as_ref()
+    }
+
+    fn full_path(&self, _: &App) -> PathBuf {
+        self.path.as_std_path().to_path_buf()
+    }
+
+    fn file_name<'a>(&'a self, _: &'a App) -> &'a str {
+        self.path
+            .as_std_path()
+            .file_name()
+            .and_then(|n| n.to_str())
+            .unwrap_or("untitled")
+    }
+
+    fn worktree_id(&self, _: &App) -> WorktreeId {
+        self.worktree_id
+    }
+
+    fn to_proto(&self, _: &App) -> language::proto::File {
+        unimplemented!()
+    }
+
+    fn is_private(&self) -> bool {
+        false
+    }
+
+    fn can_open(&self) -> bool {
+        true
+    }
+}
 
 pub struct GitStore {
     state: GitStoreState,
@@ -876,6 +930,7 @@ impl GitStore {
         cx: &mut Context<Self>,
     ) -> Task<Result<(Entity<Buffer>, Entity<BufferDiff>)>> {
         let path = path.clone();
+        let is_deleted = head_oid.is_none();
         cx.spawn(async move |_this, cx| {
             let base_content: Option<Arc<str>> = match base_oid {
                 None => None,
@@ -908,6 +963,14 @@ impl GitStore {
                 if let Some(language) = language.clone() {
                     buffer.set_language(Some(language), cx);
                 }
+                buffer.file_updated(
+                    Arc::new(DiffBlob {
+                        path: path.clone(),
+                        worktree_id: WorktreeId::from_usize(0),
+                        is_deleted,
+                    }),
+                    cx,
+                );
                 buffer
             });
 
