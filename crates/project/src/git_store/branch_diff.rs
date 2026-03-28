@@ -1,4 +1,4 @@
-use anyhow::Result;
+use anyhow::{Context as _, Result};
 use buffer_diff::BufferDiff;
 use collections::HashSet;
 use futures::StreamExt;
@@ -146,19 +146,27 @@ impl BranchDiff {
                         needs_update = true;
                     }
                 } else if let Some(repo) = this.repo.as_ref() {
-                    repo.update(cx, |repo, _| {
-                        if let Some(branch) = &repo.branch
-                            && let DiffBase::Merge { base_ref } = &this.diff_base
-                            && let Some(commit) = branch.most_recent_commit.as_ref()
-                            && &branch.ref_name == base_ref
-                            && this.base_commit.as_ref() != Some(&commit.sha)
-                        {
-                            this.base_commit = Some(commit.sha.clone());
-                            needs_update = true;
-                        }
+                    repo.update(cx, |repo, _| match &this.diff_base {
+                        DiffBase::Head => {}
+                        DiffBase::Merge { base_ref } => {
+                            if let Some(branch) = &repo.branch
+                                && let Some(commit) = branch.most_recent_commit.as_ref()
+                                && &branch.ref_name == base_ref
+                                && this.base_commit.as_ref() != Some(&commit.sha)
+                            {
+                                this.base_commit = Some(commit.sha.clone());
+                                needs_update = true;
+                            }
 
-                        if repo.head_commit.as_ref().map(|c| &c.sha) != this.head_commit.as_ref() {
-                            this.head_commit = repo.head_commit.as_ref().map(|c| c.sha.clone());
+                            if repo.head_commit.as_ref().map(|c| &c.sha)
+                                != this.head_commit.as_ref()
+                            {
+                                this.head_commit =
+                                    repo.head_commit.as_ref().map(|c| c.sha.clone());
+                                needs_update = true;
+                            }
+                        }
+                        DiffBase::Between { .. } => {
                             needs_update = true;
                         }
                     })
@@ -293,58 +301,100 @@ impl BranchDiff {
         };
 
         self.project.update(cx, |_project, cx| {
-            let mut seen = HashSet::default();
-
-            for item in repo.read(cx).cached_status() {
-                seen.insert(item.repo_path.clone());
-                let branch_diff = self
-                    .tree_diff
-                    .as_ref()
-                    .and_then(|t| t.entries.get(&item.repo_path))
-                    .cloned();
-                let Some(status) = self.merge_statuses(Some(item.status), branch_diff.as_ref())
-                else {
-                    continue;
-                };
-                if !status.has_changes() {
-                    continue;
+            match &self.diff_base {
+                DiffBase::Between { .. } => {
+                    let Some(tree_diff) = self.tree_diff.as_ref() else {
+                        return;
+                    };
+                    for (path, branch_diff) in tree_diff.entries.iter() {
+                        let Some(project_path) =
+                            repo.read(cx).repo_path_to_project_path(path, cx)
+                        else {
+                            continue;
+                        };
+                        let task = Self::load_buffer(
+                            &self.diff_base,
+                            Some(branch_diff.clone()),
+                            project_path,
+                            repo.clone(),
+                            cx,
+                        );
+                        output.push(DiffBuffer {
+                            repo_path: path.clone(),
+                            load: task,
+                            file_status: diff_status_to_file_status(branch_diff),
+                        });
+                    }
                 }
+                _ => {
+                    let mut seen = HashSet::default();
 
-                let Some(project_path) =
-                    repo.read(cx).repo_path_to_project_path(&item.repo_path, cx)
-                else {
-                    continue;
-                };
-                let task = Self::load_buffer(branch_diff, project_path, repo.clone(), cx);
+                    for item in repo.read(cx).cached_status() {
+                        seen.insert(item.repo_path.clone());
+                        let branch_diff = self
+                            .tree_diff
+                            .as_ref()
+                            .and_then(|t| t.entries.get(&item.repo_path))
+                            .cloned();
+                        let Some(status) =
+                            self.merge_statuses(Some(item.status), branch_diff.as_ref())
+                        else {
+                            continue;
+                        };
+                        if !status.has_changes() {
+                            continue;
+                        }
 
-                output.push(DiffBuffer {
-                    repo_path: item.repo_path.clone(),
-                    load: task,
-                    file_status: item.status,
-                });
-            }
-            let Some(tree_diff) = self.tree_diff.as_ref() else {
-                return;
-            };
+                        let Some(project_path) =
+                            repo.read(cx).repo_path_to_project_path(&item.repo_path, cx)
+                        else {
+                            continue;
+                        };
+                        let task = Self::load_buffer(
+                            &self.diff_base,
+                            branch_diff,
+                            project_path,
+                            repo.clone(),
+                            cx,
+                        );
 
-            for (path, branch_diff) in tree_diff.entries.iter() {
-                if seen.contains(&path) {
-                    continue;
+                        output.push(DiffBuffer {
+                            repo_path: item.repo_path.clone(),
+                            load: task,
+                            file_status: item.status,
+                        });
+                    }
+                    let Some(tree_diff) = self.tree_diff.as_ref() else {
+                        return;
+                    };
+
+                    for (path, branch_diff) in tree_diff.entries.iter() {
+                        if seen.contains(&path) {
+                            continue;
+                        }
+
+                        let Some(project_path) =
+                            repo.read(cx).repo_path_to_project_path(path, cx)
+                        else {
+                            continue;
+                        };
+                        let task = Self::load_buffer(
+                            &self.diff_base,
+                            Some(branch_diff.clone()),
+                            project_path,
+                            repo.clone(),
+                            cx,
+                        );
+
+                        let file_status = diff_status_to_file_status(branch_diff);
+
+                        output.push(DiffBuffer {
+                            repo_path: path.clone(),
+                            load: task,
+                            file_status,
+                        });
+                    }
                 }
-
-                let Some(project_path) = repo.read(cx).repo_path_to_project_path(&path, cx) else {
-                    continue;
-                };
-                let task =
-                    Self::load_buffer(Some(branch_diff.clone()), project_path, repo.clone(), cx);
-
-                let file_status = diff_status_to_file_status(branch_diff);
-
-                output.push(DiffBuffer {
-                    repo_path: path.clone(),
-                    load: task,
-                    file_status,
-                });
             }
         });
         output
@@ -352,35 +402,58 @@ impl BranchDiff {
 
     #[instrument(skip_all)]
     fn load_buffer(
+        diff_base: &DiffBase,
         branch_diff: Option<git::status::TreeDiffStatus>,
         project_path: crate::ProjectPath,
         repo: Entity<Repository>,
         cx: &Context<'_, Project>,
     ) -> Task<Result<(Entity<Buffer>, Entity<BufferDiff>)>> {
+        let diff_base = diff_base.clone();
         let task = cx.spawn(async move |project, cx| {
             let buffer = project
                 .update(cx, |project, cx| project.open_buffer(project_path, cx))?
                 .await?;
 
-            let changes = if let Some(entry) = branch_diff {
-                let oid = match entry {
-                    git::status::TreeDiffStatus::Added { .. } => None,
-                    git::status::TreeDiffStatus::Modified { old, .. }
-                    | git::status::TreeDiffStatus::Deleted { old } => Some(old),
-                };
-                project
-                    .update(cx, |project, cx| {
-                        project.git_store().update(cx, |git_store, cx| {
-                            git_store.open_diff_since(oid, buffer.clone(), repo, cx)
-                        })
-                    })?
-                    .await?
-            } else {
-                project
-                    .update(cx, |project, cx| {
-                        project.open_uncommitted_diff(buffer.clone(), cx)
-                    })?
-                    .await?
+            let changes = match &diff_base {
+                DiffBase::Between { .. } => {
+                    let entry = branch_diff.context(
+                        "Between mode requires a tree diff entry",
+                    )?;
+                    let _base_oid = match &entry {
+                        git::status::TreeDiffStatus::Modified { old, .. }
+                        | git::status::TreeDiffStatus::Deleted { old } => Some(*old),
+                        git::status::TreeDiffStatus::Added { .. } => None,
+                    };
+                    let _head_oid = match &entry {
+                        git::status::TreeDiffStatus::Modified { new, .. }
+                        | git::status::TreeDiffStatus::Added { new } => Some(*new),
+                        git::status::TreeDiffStatus::Deleted { .. } => None,
+                    };
+                    // TODO: Wire to git_store.open_diff_between() in Task 5
+                    anyhow::bail!("Between mode buffer loading not yet implemented")
+                }
+                _ => {
+                    if let Some(entry) = branch_diff {
+                        let oid = match entry {
+                            git::status::TreeDiffStatus::Added { .. } => None,
+                            git::status::TreeDiffStatus::Modified { old, .. }
+                            | git::status::TreeDiffStatus::Deleted { old } => Some(old),
+                        };
+                        project
+                            .update(cx, |project, cx| {
+                                project.git_store().update(cx, |git_store, cx| {
+                                    git_store.open_diff_since(oid, buffer.clone(), repo, cx)
+                                })
+                            })?
+                            .await?
+                    } else {
+                        project
+                            .update(cx, |project, cx| {
+                                project.open_uncommitted_diff(buffer.clone(), cx)
+                            })?
+                            .await?
+                    }
+                }
             };
             Ok((buffer, changes))
         });
