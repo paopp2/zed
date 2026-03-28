@@ -186,6 +186,13 @@ impl DiffFileList {
         (node, SharedString::from(name))
     }
 
+    fn scroll_to_selected_entry(&self) {
+        if let Some(index) = self.selected_index {
+            self.scroll_handle
+                .scroll_to_item(index, ScrollStrategy::Center);
+        }
+    }
+
     fn toggle_directory(&mut self, path: &RepoPath, cx: &mut Context<Self>) {
         let expanded = self.expanded_dirs.entry(path.clone()).or_insert(true);
         *expanded = !*expanded;
@@ -200,12 +207,14 @@ impl DiffFileList {
         });
         if index != self.selected_index {
             self.selected_index = index;
+            self.scroll_to_selected_entry();
             cx.notify();
         }
     }
 
     fn select_file(&mut self, index: usize, cx: &mut Context<Self>) {
         self.selected_index = Some(index);
+        self.scroll_to_selected_entry();
         if let Some(DiffFileEntry::File { repo_path, .. }) = self.flattened.get(index) {
             cx.emit(DiffFileListEvent::FileSelected {
                 repo_path: repo_path.clone(),
