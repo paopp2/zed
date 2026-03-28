@@ -483,6 +483,9 @@ impl ProjectDiff {
                             .and_then(|td| td.entries.get(repo_path))
                             .map(|s| matches!(s, git::status::TreeDiffStatus::Added { .. }))
                             .unwrap_or(false);
+                        // sort_prefix() only checks is_created() to distinguish
+                        // NEW_SORT_PREFIX from TRACKED_SORT_PREFIX, so a synthetic
+                        // FileStatus with Added-or-Modified is sufficient here.
                         let sort_prefix = if let Some(repo) = branch_diff.repo() {
                             let status = if is_added {
                                 FileStatus::Tracked(TrackedStatus {
