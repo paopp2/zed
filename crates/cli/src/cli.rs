@@ -69,6 +69,12 @@ pub enum CliRequest {
     SetOpenBehavior {
         behavior: CliBehaviorSetting,
     },
+    GitDiff {
+        from_ref: String,
+        to_ref: String,
+        cwd: Option<String>,
+        env: Option<HashMap<String, String>>,
+    },
 }
 
 #[derive(Debug, Serialize, Deserialize)]
