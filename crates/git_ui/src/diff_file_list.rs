@@ -1,7 +1,7 @@
 use collections::BTreeMap;
 use git::{
     repository::RepoPath,
-    status::TreeDiffStatus,
+    status::{DiffStat, TreeDiffStatus},
 };
 use gpui::{
     App, ClickEvent, Context, EventEmitter, FocusHandle, Focusable, KeyContext, Render,
@@ -26,6 +26,7 @@ pub enum DiffFileListEvent {
 
 pub struct DiffFileList {
     source_entries: collections::HashMap<RepoPath, TreeDiffStatus>,
+    stats: Option<collections::HashMap<RepoPath, DiffStat>>,
     flattened: Vec<DiffFileEntry>,
     expanded_dirs: collections::HashMap<RepoPath, bool>,
     selected_index: Option<usize>,
@@ -46,6 +47,7 @@ enum DiffFileEntry {
         name: SharedString,
         depth: usize,
         status: TreeDiffStatus,
+        stats: Option<DiffStat>,
     },
 }
 
@@ -76,6 +78,7 @@ impl DiffFileList {
     pub fn new(cx: &mut Context<Self>) -> Self {
         Self {
             source_entries: collections::HashMap::default(),
+            stats: None,
             flattened: Vec::new(),
             expanded_dirs: collections::HashMap::default(),
             selected_index: None,
@@ -87,15 +90,22 @@ impl DiffFileList {
     pub fn update_entries(
         &mut self,
         entries: &collections::HashMap<RepoPath, TreeDiffStatus>,
+        stats: Option<&collections::HashMap<RepoPath, DiffStat>>,
         cx: &mut Context<Self>,
     ) {
-        if self.source_entries == *entries {
+        let stats_changed = match (&self.stats, stats) {
+            (None, None) => false,
+            (Some(a), Some(b)) => a != b,
+            _ => true,
+        };
+        if self.source_entries == *entries && !stats_changed {
             return;
         }
 
         let selected_path = self.selected_path();
 
         self.source_entries = entries.clone();
+        self.stats = stats.cloned();
         self.rebuild_flattened(entries);
 
         if let Some(path) = &selected_path {
@@ -174,11 +184,13 @@ impl DiffFileList {
                 .file_name()
                 .unwrap_or_default()
                 .to_string();
+            let stat = self.stats.as_ref().and_then(|s| s.get(repo_path)).copied();
             flattened.push(DiffFileEntry::File {
                 repo_path: repo_path.clone(),
                 name: SharedString::from(file_name),
                 depth,
                 status: status.clone(),
+                stats: stat,
             });
         }
 
@@ -441,8 +453,9 @@ impl DiffFileList {
                     }))
                     .into_any_element()
             }
-            DiffFileEntry::File { name, depth, status, .. } => {
+            DiffFileEntry::File { name, depth, status, stats, .. } => {
                 let label_color = status_color(status);
+                let stats = *stats;
 
                 h_flex()
                     .id(ElementId::Name(format!("diff-file-{ix}").into()))
@@ -467,6 +480,17 @@ impl DiffFileList {
                             .size(LabelSize::Small)
                             .color(label_color),
                     )
+                    .child(div().flex_grow())
+                    .when_some(stats, |this, stat| {
+                        this.child(
+                            ui::DiffStat::new(
+                                format!("stat-{ix}"),
+                                stat.added as usize,
+                                stat.deleted as usize,
+                            )
+                            .label_size(LabelSize::XSmall),
+                        )
+                    })
                     .on_click(cx.listener(move |this, _: &ClickEvent, _window, cx| {
                         this.select_file(ix, cx);
                     }))
