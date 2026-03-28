@@ -93,12 +93,7 @@ impl DiffFileList {
         stats: Option<&collections::HashMap<RepoPath, DiffStat>>,
         cx: &mut Context<Self>,
     ) {
-        let stats_changed = match (&self.stats, stats) {
-            (None, None) => false,
-            (Some(a), Some(b)) => a != b,
-            _ => true,
-        };
-        if self.source_entries == *entries && !stats_changed {
+        if self.source_entries == *entries && self.stats.as_ref() == stats {
             return;
         }
 
@@ -426,7 +421,7 @@ impl DiffFileList {
                 };
 
                 h_flex()
-                    .id(ElementId::Name(format!("diff-dir-{ix}").into()))
+                    .id(ElementId::NamedInteger("diff-dir".into(), ix as u64))
                     .w_full()
                     .h(px(28.))
                     .px_2()
@@ -458,7 +453,7 @@ impl DiffFileList {
                 let stats = *stats;
 
                 h_flex()
-                    .id(ElementId::Name(format!("diff-file-{ix}").into()))
+                    .id(ElementId::NamedInteger("diff-file".into(), ix as u64))
                     .w_full()
                     .h(px(28.))
                     .px_2()
@@ -484,7 +479,7 @@ impl DiffFileList {
                     .when_some(stats, |this, stat| {
                         this.child(
                             ui::DiffStat::new(
-                                format!("stat-{ix}"),
+                                ElementId::NamedInteger("stat".into(), ix as u64),
                                 stat.added as usize,
                                 stat.deleted as usize,
                             )
