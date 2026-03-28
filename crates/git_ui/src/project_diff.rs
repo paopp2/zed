@@ -499,6 +499,9 @@ impl ProjectDiff {
                         );
                         this.move_to_path(path_key, window, cx);
                     }
+                    DiffFileListEvent::FocusEditor => {
+                        this.editor.focus_handle(cx).focus(window, cx);
+                    }
                 }
             })
         });
