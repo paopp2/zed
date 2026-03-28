@@ -469,17 +469,7 @@ impl ProjectDiff {
             DiffBase::Merge { .. } | DiffBase::Between { .. }
         );
         let file_list = if is_branch_diff {
-            let file_list = cx.new(|cx| DiffFileList::new(cx));
-            let tree_entries = branch_diff
-                .read(cx)
-                .tree_diff()
-                .map(|diff| diff.entries.clone());
-            if let Some(entries) = tree_entries {
-                file_list.update(cx, |list, cx| {
-                    list.update_entries(&entries, cx);
-                });
-            }
-            Some(file_list)
+            Some(cx.new(|cx| DiffFileList::new(cx)))
         } else {
             None
         };
@@ -529,6 +519,21 @@ impl ProjectDiff {
 
     pub fn diff_base<'a>(&'a self, cx: &'a App) -> &'a DiffBase {
         self.branch_diff.read(cx).diff_base()
+    }
+
+    fn sync_file_list(&self, cx: &mut Context<Self>) {
+        if let Some(file_list) = &self.file_list {
+            let tree_entries = self
+                .branch_diff
+                .read(cx)
+                .tree_diff()
+                .map(|diff| diff.entries.clone());
+            if let Some(entries) = tree_entries {
+                file_list.update(cx, |list, cx| {
+                    list.update_entries(&entries, cx);
+                });
+            }
+        }
     }
 
     pub fn move_to_entry(
@@ -942,18 +947,7 @@ impl ProjectDiff {
                         .update(cx, |editor, cx| editor.fold_buffers(buffers_to_fold, cx));
                 });
             }
-            if let Some(file_list) = &this.file_list {
-                let tree_entries = this
-                    .branch_diff
-                    .read(cx)
-                    .tree_diff()
-                    .map(|diff| diff.entries.clone());
-                if let Some(entries) = tree_entries {
-                    file_list.update(cx, |list, cx| {
-                        list.update_entries(&entries, cx);
-                    });
-                }
-            }
+            this.sync_file_list(cx);
             this.pending_scroll.take();
             cx.notify();
         })?;

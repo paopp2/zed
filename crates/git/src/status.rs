@@ -537,6 +537,22 @@ pub enum TreeDiffStatus {
     Deleted { old: Oid },
 }
 
+impl TreeDiffStatus {
+    pub fn old_oid(&self) -> Option<Oid> {
+        match self {
+            TreeDiffStatus::Modified { old, .. } | TreeDiffStatus::Deleted { old } => Some(*old),
+            TreeDiffStatus::Added { .. } => None,
+        }
+    }
+
+    pub fn new_oid(&self) -> Option<Oid> {
+        match self {
+            TreeDiffStatus::Modified { new, .. } | TreeDiffStatus::Added { new } => Some(*new),
+            TreeDiffStatus::Deleted { .. } => None,
+        }
+    }
+}
+
 impl FromStr for TreeDiff {
     type Err = anyhow::Error;
 
