@@ -26,7 +26,7 @@ use gpui::{
     FocusHandle, Focusable, Render, Subscription, Task, WeakEntity, actions,
 };
 use language::{Anchor, Buffer, BufferId, Capability, OffsetRangeExt};
-use multi_buffer::{MultiBuffer, PathKey};
+use multi_buffer::{BufferOffset, MultiBuffer, MultiBufferOffset, PathKey};
 use project::{
     Project, ProjectPath,
     git_store::{
@@ -37,6 +37,7 @@ use project::{
 use settings::{Settings, SettingsStore};
 use smol::future::yield_now;
 use std::any::{Any, TypeId};
+use std::ops::Range;
 use std::sync::Arc;
 use theme::ActiveTheme;
 use ui::{DiffStat, Divider, KeyBinding, Tooltip, prelude::*, vertical_divider};
@@ -413,6 +414,7 @@ impl ProjectDiff {
                             branch_diff: branch_diff.clone(),
                         });
                         editor.start_temporary_diff_override();
+                        editor.set_delegate_open_excerpts(true);
                     }
                 }
             });
@@ -759,12 +761,121 @@ impl ProjectDiff {
                     Self::refresh(this, RefreshReason::EditorSaved, cx).await
                 });
             }
+            EditorEvent::OpenExcerptsRequested {
+                selections_by_buffer,
+                split,
+            } => {
+                self.open_excerpts_resolving_diff_blobs(selections_by_buffer, *split, window, cx);
+            }
             _ => {}
         }
         if editor.focus_handle(cx).contains_focused(window, cx)
             && self.multibuffer.read(cx).is_empty()
         {
             self.focus_handle.focus(window, cx)
+        }
+    }
+
+    fn open_excerpts_resolving_diff_blobs(
+        &self,
+        selections_by_buffer: &HashMap<BufferId, (Vec<Range<BufferOffset>>, Option<u32>)>,
+        split: bool,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let repo = self.branch_diff.read(cx).repo().cloned();
+        let multibuffer = self.multibuffer.read(cx);
+
+        let mut real_file_paths: Vec<(ProjectPath, Vec<Range<BufferOffset>>, Option<u32>)> =
+            Vec::new();
+        let mut fallback_buffers: HashMap<
+            Entity<Buffer>,
+            (Vec<Range<BufferOffset>>, Option<u32>),
+        > = HashMap::default();
+
+        for (buffer_id, (ranges, scroll_offset)) in selections_by_buffer {
+            let Some(buffer) = multibuffer.buffer(*buffer_id) else {
+                continue;
+            };
+
+            let resolved = (|| {
+                let file = buffer.read(cx).file()?;
+                if file.as_local().is_some() {
+                    return None;
+                }
+                if file.disk_state().is_deleted() {
+                    return None;
+                }
+                let path = file.path();
+                let repo_path = RepoPath::from_rel_path(path.as_ref());
+                let repo = repo.as_ref()?;
+                repo.read(cx).repo_path_to_project_path(&repo_path, cx)
+            })();
+
+            match resolved {
+                Some(project_path) => {
+                    real_file_paths.push((project_path, ranges.clone(), *scroll_offset));
+                }
+                None => {
+                    fallback_buffers.insert(buffer, (ranges.clone(), *scroll_offset));
+                }
+            }
+        }
+
+        let Some(workspace) = self.workspace.upgrade() else {
+            return;
+        };
+
+        for (project_path, ranges, scroll_offset) in real_file_paths {
+            let task = workspace.update(cx, |workspace, cx| {
+                if split {
+                    workspace.split_path(project_path, window, cx)
+                } else {
+                    workspace.open_path(project_path, None, true, window, cx)
+                }
+            });
+            window
+                .spawn(cx, {
+                    async move |cx| {
+                        let Some(editor) = task.await?.downcast::<Editor>() else {
+                            return anyhow::Ok(());
+                        };
+                        editor
+                            .update_in(cx, |editor, window, cx| {
+                                let autoscroll = match scroll_offset {
+                                    Some(offset) => Autoscroll::top_relative(offset as usize),
+                                    None => Autoscroll::newest(),
+                                };
+                                let nav_history = editor.nav_history().cloned();
+                                editor.set_nav_history(None);
+                                editor.change_selections(
+                                    SelectionEffects::scroll(autoscroll),
+                                    window,
+                                    cx,
+                                    |s| {
+                                        s.select_ranges(ranges.iter().map(|r| {
+                                            MultiBufferOffset(r.start.0)
+                                                ..MultiBufferOffset(r.end.0)
+                                        }));
+                                    },
+                                );
+                                editor.set_nav_history(nav_history);
+                            })
+                            .log_err();
+                        anyhow::Ok(())
+                    }
+                })
+                .detach_and_log_err(cx);
+        }
+
+        if !fallback_buffers.is_empty() {
+            Editor::open_buffers_in_workspace(
+                workspace.downgrade(),
+                fallback_buffers,
+                split,
+                window,
+                cx,
+            );
         }
     }
 
