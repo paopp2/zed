@@ -48,7 +48,7 @@ use gpui::{
     WeakEntity,
 };
 use language::{
-    Buffer, BufferEvent, Language, LanguageRegistry,
+    Buffer, BufferEvent, Capability, Language, LanguageRegistry,
     proto::{deserialize_version, serialize_version},
 };
 use parking_lot::Mutex;
@@ -864,6 +864,75 @@ impl GitStore {
         self.loading_diffs
             .insert((buffer_id, diff_kind), task.clone());
         cx.background_spawn(async move { task.await.map_err(|e| anyhow!("{e}")) })
+    }
+
+    pub fn open_diff_between(
+        &mut self,
+        base_oid: Option<git::Oid>,
+        head_oid: Option<git::Oid>,
+        path: &RepoPath,
+        language_registry: Arc<LanguageRegistry>,
+        repo: Entity<Repository>,
+        cx: &mut Context<Self>,
+    ) -> Task<Result<(Entity<Buffer>, Entity<BufferDiff>)>> {
+        let path = path.clone();
+        cx.spawn(async move |_this, cx| {
+            let base_content: Option<Arc<str>> = match base_oid {
+                None => None,
+                Some(oid) => Some(
+                    repo.update(cx, |repo, cx| repo.load_blob_content(oid, cx))
+                        .await?
+                        .into(),
+                ),
+            };
+            let head_content: Option<Arc<str>> = match head_oid {
+                None => None,
+                Some(oid) => Some(
+                    repo.update(cx, |repo, cx| repo.load_blob_content(oid, cx))
+                        .await?
+                        .into(),
+                ),
+            };
+
+            let head_text: Arc<str> = head_content
+                .unwrap_or_else(|| "".into());
+
+            let language = language_registry
+                .load_language_for_file_path(path.as_std_path())
+                .await
+                .ok();
+
+            let buffer = cx.new(|cx| {
+                let mut buffer = Buffer::local(head_text.as_ref(), cx);
+                buffer.set_capability(Capability::ReadOnly, cx);
+                if let Some(language) = language.clone() {
+                    buffer.set_language(Some(language), cx);
+                }
+                buffer
+            });
+
+            let text_snapshot = buffer.update(cx, |buffer, _| buffer.text_snapshot());
+            let buffer_diff = cx.new(|cx| BufferDiff::new(&text_snapshot, cx));
+
+            buffer_diff
+                .update(cx, |buffer_diff, cx| {
+                    buffer_diff.language_changed(
+                        language.clone(),
+                        Some(language_registry),
+                        cx,
+                    );
+                    buffer_diff.set_base_text(
+                        base_content,
+                        language,
+                        text_snapshot,
+                        cx,
+                    )
+                })
+                .await
+                .map_err(|_: Canceled| anyhow!("diff calculation was dropped"))?;
+
+            Ok((buffer, buffer_diff))
+        })
     }
 
     #[ztracing::instrument(skip_all)]
