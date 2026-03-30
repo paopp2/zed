@@ -8757,6 +8757,86 @@ async fn test_clipboard_line_numbers_from_multibuffer(cx: &mut TestAppContext) {
 }
 
 #[gpui::test]
+async fn test_copy_file_location_from_multibuffer(cx: &mut TestAppContext) {
+    init_test(cx, |_| {});
+
+    let fs = FakeFs::new(cx.executor());
+    fs.insert_tree(
+        path!("/root"),
+        json!({
+            "src": {
+                "file.txt": "first line\nsecond line\nthird line\nfourth line\nfifth line\n"
+            }
+        }),
+    )
+    .await;
+
+    let project = Project::test(fs, [path!("/root").as_ref()], cx).await;
+
+    let buffer = project
+        .update(cx, |project, cx| {
+            project.open_local_buffer(path!("/root/src/file.txt"), cx)
+        })
+        .await
+        .unwrap();
+
+    // Create a multibuffer showing only lines 3-5 (0-indexed rows 2-4)
+    let multibuffer = cx.new(|cx| {
+        let mut multibuffer = MultiBuffer::new(ReadWrite);
+        multibuffer.set_excerpts_for_path(
+            PathKey::sorted(0),
+            buffer.clone(),
+            [Point::new(2, 0)..Point::new(5, 0)],
+            0,
+            cx,
+        );
+        multibuffer
+    });
+
+    let (editor, cx) = cx.add_window_view(|window, cx| {
+        build_editor_with_project(project.clone(), multibuffer, window, cx)
+    });
+
+    // Place cursor on the first visible line, which is "third line" (row 2 in the file, 1-indexed = line 3)
+    editor.update_in(cx, |editor, window, cx| {
+        assert_eq!(editor.text(cx), "third line\nfourth line\nfifth line\n");
+        editor.change_selections(SelectionEffects::no_scroll(), window, cx, |s| {
+            s.select_ranges([Point::new(0, 0)..Point::new(0, 0)]);
+        });
+        editor.copy_file_location(&CopyFileLocation, window, cx);
+    });
+
+    let clipboard_text = cx
+        .read_from_clipboard()
+        .and_then(|item| item.text().as_deref().map(str::to_string));
+
+    // Should be line 3 (the buffer-local line), NOT line 1 (multibuffer row 0 + 1)
+    assert_eq!(
+        clipboard_text,
+        Some("src/file.txt:3".to_string()),
+        "should use buffer-local line number, not multibuffer row"
+    );
+
+    // Select across multiple lines and verify the range uses buffer-local line numbers
+    editor.update_in(cx, |editor, window, cx| {
+        editor.change_selections(SelectionEffects::no_scroll(), window, cx, |s| {
+            s.select_ranges([Point::new(0, 0)..Point::new(2, 5)]);
+        });
+        editor.copy_file_location(&CopyFileLocation, window, cx);
+    });
+
+    let clipboard_text = cx
+        .read_from_clipboard()
+        .and_then(|item| item.text().as_deref().map(str::to_string));
+
+    assert_eq!(
+        clipboard_text,
+        Some("src/file.txt:3-5".to_string()),
+        "multi-line selection should use buffer-local line range"
+    );
+}
+
+#[gpui::test]
 async fn test_paste_multiline(cx: &mut TestAppContext) {
     init_test(cx, |_| {});
 

@@ -23400,20 +23400,33 @@ impl Editor {
         _: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        let selection = self.selections.newest::<Point>(&self.display_snapshot(cx));
+        let file_location = maybe!({
+            let display_snapshot = self.display_snapshot(cx);
+            let selection = self.selections.newest::<Point>(&display_snapshot);
+            let selection_range = selection.range();
 
-        let start_line = selection.start.row + 1;
-        let end_line = selection.end.row + 1;
+            let buffer_ranges = display_snapshot
+                .buffer_snapshot()
+                .range_to_buffer_ranges(selection_range);
 
-        let end_line = if selection.end.column == 0 && end_line > start_line {
-            end_line - 1
-        } else {
-            end_line
-        };
+            let (buffer_snapshot, range, _) = if selection.reversed {
+                buffer_ranges.first()
+            } else {
+                buffer_ranges.last()
+            }?;
 
-        if let Some(file_location) = self.active_buffer(cx).and_then(|buffer| {
+            let buffer_range = range.to_point(buffer_snapshot);
+            let start_line = buffer_range.start.row + 1;
+            let end_line = buffer_range.end.row + 1;
+
+            let end_line = if buffer_range.end.column == 0 && end_line > start_line {
+                end_line - 1
+            } else {
+                end_line
+            };
+
             let project = self.project()?.read(cx);
-            let file = buffer.read(cx).file()?;
+            let file = buffer_snapshot.file()?;
             let path = file.path().display(project.path_style(cx));
 
             let location = if start_line == end_line {
@@ -23422,7 +23435,9 @@ impl Editor {
                 format!("{path}:{start_line}-{end_line}")
             };
             Some(location)
-        }) {
+        });
+
+        if let Some(file_location) = file_location {
             cx.write_to_clipboard(ClipboardItem::new_string(file_location));
         }
     }
