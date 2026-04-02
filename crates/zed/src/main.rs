@@ -361,6 +361,13 @@ fn main() {
 
     let (open_listener, mut open_rx) = OpenListener::new();
 
+    // Launch Services can only route URLs to .app bundles, so dev builds need
+    // a Unix socket for the CLI to reach a running instance.
+    #[cfg(target_os = "macos")]
+    if *release_channel::RELEASE_CHANNEL == ReleaseChannel::Dev {
+        crate::zed::listen_for_cli_connections(open_listener.clone()).log_err();
+    }
+
     let failed_single_instance_check = if *zed_env_vars::ZED_STATELESS
         || *release_channel::RELEASE_CHANNEL == ReleaseChannel::Dev
     {

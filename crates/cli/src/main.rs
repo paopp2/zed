@@ -1241,6 +1241,7 @@ mod mac_os {
     use std::{
         ffi::OsStr,
         fs, io,
+        os::unix::net::UnixDatagram,
         path::{Path, PathBuf},
         process::{Command, ExitStatus},
         ptr,
@@ -1350,6 +1351,20 @@ mod mac_os {
                 }
 
                 Self::LocalPath { executable, .. } => {
+                    // Launch Services can only route to .app bundles, so try
+                    // the Unix socket before falling back to spawning.
+                    let sock_path = paths::data_dir().join(format!(
+                        "zed-{}.sock",
+                        *release_channel::RELEASE_CHANNEL_NAME
+                    ));
+                    if let Ok(sock) = UnixDatagram::unbound() {
+                        if sock.connect(&sock_path).is_ok()
+                            && sock.send(url.as_bytes()).is_ok()
+                        {
+                            return Ok(());
+                        }
+                    }
+
                     let executable_parent = executable
                         .parent()
                         .with_context(|| format!("Executable {executable:?} path has no parent"))?;

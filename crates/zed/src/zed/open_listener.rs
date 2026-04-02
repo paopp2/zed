@@ -281,19 +281,29 @@ impl OpenListener {
     }
 }
 
-#[cfg(any(target_os = "linux", target_os = "freebsd"))]
+#[cfg(unix)]
 pub fn listen_for_cli_connections(opener: OpenListener) -> Result<()> {
     use release_channel::RELEASE_CHANNEL_NAME;
     use std::os::unix::net::UnixDatagram;
 
     let sock_path = paths::data_dir().join(format!("zed-{}.sock", *RELEASE_CHANNEL_NAME));
-    // remove the socket if the process listening on it has died
+    // Remove stale socket left behind by a crashed instance.
+    // On Linux, connect() returns ConnectionRefused for dead sockets.
+    // On macOS, datagram connect() succeeds even for stale sockets,
+    // so we fall back to removing the file when bind() fails.
     if let Err(e) = UnixDatagram::unbound()?.connect(&sock_path)
         && e.kind() == std::io::ErrorKind::ConnectionRefused
     {
         std::fs::remove_file(&sock_path)?;
     }
-    let listener = UnixDatagram::bind(&sock_path)?;
+    let listener = match UnixDatagram::bind(&sock_path) {
+        Ok(listener) => listener,
+        Err(_) if sock_path.exists() => {
+            std::fs::remove_file(&sock_path)?;
+            UnixDatagram::bind(&sock_path)?
+        }
+        Err(e) => return Err(e.into()),
+    };
     thread::spawn(move || {
         let mut buf = [0u8; 1024];
         while let Ok(len) = listener.recv(&mut buf) {
